@@ -15,11 +15,12 @@
 */
 
 
-int main() {
+int main(void) {
     long Status;
     /* Initialize the MAC */
+    
     XEmacPs_Config *macConfig;
-    XEmacPs * macPtr;
+    XEmacPs * macPtr = &macInstance;
     u32 gemVersion;
     u16 macIntrId;
     
@@ -30,12 +31,10 @@ int main() {
     macIntrId = XPS_GEM0_INT_ID;
 
     //Configure the Controller
-    macNwcfgConfig(macPtr);
+    // macNwcfgConfig(macPtr);
+    XEmacPsClkSetup(macPtr);
 
     gemVersion = ((Xil_In32(macConfig->BaseAddress + 0xFC)) >> 16) & 0xFFF;
-    
-    //Configure MAC Clock
-    XEmacPsClkSetup(macPtr);
 
     /*
 	 * Set the MAC address
@@ -80,12 +79,13 @@ int main() {
 
     //Maximum divisor, CPU clock is 667MHz
     XEmacPs_SetMdioDivisor(macPtr, MDC_DIV_224);
-    EmacpsDelay(1);
+
+    sleep(1);
+
 
     //Auto negotiate and Establish Link
-    // phyConfig(EmacPsInstancePtr);
-    // phyAutoNegotiate(EmacPsInstancePtr);
-    // phyLinkStatus(EmacPsInstancePtr);
+    phyConfig(macPtr, EMACPS_LOOPBACK_SPEED_1G);
 
+    xil_printf("Exiting\n\r");
     return 0;
 }

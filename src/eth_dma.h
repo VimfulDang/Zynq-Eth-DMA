@@ -26,4 +26,7 @@ EthernetFrame RxFrame;		/* Receive buffer */
 u8 bd_space[0x100000] __attribute__ ((aligned (0x100000)));
 u8 * RxBdSpacePtr, TxBdSpacePtr;
 
+#define RXBD_CNT       32	/* Number of RxBDs to use */
+#define TXBD_CNT       32	/* Number of TxBDs to use */
+
 char srcMac[] = { 0x00, 0x18, 0x3E, 0x03, 0x61, 0x7D};

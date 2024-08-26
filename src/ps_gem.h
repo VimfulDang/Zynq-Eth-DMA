@@ -1,16 +1,8 @@
 #include "xparameters.h"
 #include "xemacps.h"
+#include "xil_exception.h"
 
-/*
-    MAC Registers
-*/
 
-#define XEMACPS_NWCFG_OFFSET            0x00000004
-
-/*
-    Network Configuration Register
-*/
-#define XEMACPS_NWCFG_MDCCLKDIV_MASK    0x00070000
 
 /*
  * SLCR setting
@@ -25,6 +17,23 @@
 
 #define EMACPS_SLCR_DIV_MASK	0xFC0FC0FF
 
+XEmacPs macInstance;
+XScuGic IntcInstance;
+
+/*
+	PHY Registers
+*/
+u32 XEmacPsDetectPHY(XEmacPs * EmacPsInstancePtr);
+#define EMACPS_LOOPBACK_SPEED_1G 1000	/* 1000Mbps */
+
+#define PHY_ID_RTL			0x1C
+#define PHY_DETECT_REG1 	0x2
+#define PHY_DETECT_REG2 	0x3
+#define PHY_REG0_RESET		0x8000
+#define PHY_REG0_LOOPBACK 	0x4000
+#define PHY_REG1_LINKSTS	0x0004
+#define PHY_REG1_AUTONEG	0x0020
+
 /*
     Function Prototypes
 */
@@ -33,6 +42,12 @@ void XEmacPsClkSetup(XEmacPs *EmacPsInstancePtr);
 static void XEmacPsSendHandler(void *Callback);
 static void XEmacPsRecvHandler(void *Callback);
 static void XEmacPsErrorHandler(void *Callback, u8 Direction, u32 ErrorWord);
+static LONG EmacPsResetDevice(XEmacPs * EmacPsInstancePtr);
+
+
+LONG phyConfig(XEmacPs * macPtr, u32 speed);
+LONG phyAutoNegotiate(XEmacPs * macPtr, u32 PhyAddr);
+LONG phyLinkStatus(XEmacPs * macPtr, u32 PhyAddr);
 
 ///**  @name MDC clock division
 // *  currently supporting 8, 16, 32, 48, 64, 96, 128, 224.
@@ -41,68 +56,6 @@ static void XEmacPsErrorHandler(void *Callback, u8 Direction, u32 ErrorWord);
 //typedef enum { MDC_DIV_8 = 0U, MDC_DIV_16, MDC_DIV_32, MDC_DIV_48,
 //	MDC_DIV_64, MDC_DIV_96, MDC_DIV_128, MDC_DIV_224
 //} XEmacPs_MdcDiv;
-
-void XEmacPs_SetMdioDivisor(XEmacPs *InstancePtr, XEmacPs_MdcDiv Divisor);
-
-//
-///*****************************************************************************/
-///**
-// * Set the MAC address for this driver/device.  The address is a 48-bit value.
-// * The device must be stopped before calling this function.
-// *
-// * @param InstancePtr is a pointer to the instance to be worked on.
-// * @param AddressPtr is a pointer to a 6-byte MAC address.
-// * @param Index is a index to which MAC (1-4) address.
-// *
-// * @return
-// * - XST_SUCCESS if the MAC address was set successfully
-// * - XST_DEVICE_IS_STARTED if the device has not yet been stopped
-// *
-// *****************************************************************************/
-//LONG XEmacPs_SetMacAddress(XEmacPs *InstancePtr, void *AddressPtr, u8 Index)
-//{
-//	u32 MacAddr;
-//	u8 *Aptr = (u8 *)(void *)AddressPtr;
-//	u8 IndexLoc = Index;
-//	LONG Status;
-//	Xil_AssertNonvoid(InstancePtr != NULL);
-//	Xil_AssertNonvoid(Aptr != NULL);
-//	Xil_AssertNonvoid(InstancePtr->IsReady == (u32)XIL_COMPONENT_IS_READY);
-//	Xil_AssertNonvoid((IndexLoc <= (u8)XEMACPS_MAX_MAC_ADDR) && (IndexLoc > 0x00U));
-//
-//	/* Be sure device has been stopped */
-//	if (InstancePtr->IsStarted == (u32)XIL_COMPONENT_IS_STARTED) {
-//		Status = (LONG)(XST_DEVICE_IS_STARTED);
-//	}
-//	else{
-//	/* Index ranges 1 to 4, for offset calculation is 0 to 3. */
-//		IndexLoc--;
-//
-//	/* Set the MAC bits [31:0] in BOT */
-//		MacAddr = *(Aptr);
-//		MacAddr |= ((u32)(*(Aptr+1)) << 8U);
-//		MacAddr |= ((u32)(*(Aptr+2)) << 16U);
-//		MacAddr |= ((u32)(*(Aptr+3)) << 24U);
-//	XEmacPs_WriteReg(InstancePtr->Config.BaseAddress,
-//				((u32)XEMACPS_LADDR1L_OFFSET + ((u32)IndexLoc * (u32)8)), MacAddr);
-//
-//	/* There are reserved bits in TOP so don't affect them */
-//	MacAddr = XEmacPs_ReadReg(InstancePtr->Config.BaseAddress,
-//					((u32)XEMACPS_LADDR1H_OFFSET + ((u32)IndexLoc * (u32)8)));
-//
-//		MacAddr &= (u32)(~XEMACPS_LADDR_MACH_MASK);
-//
-//	/* Set MAC bits [47:32] in TOP */
-//		MacAddr |= (u32)(*(Aptr+4));
-//		MacAddr |= (u32)(*(Aptr+5)) << 8U;
-//
-//	XEmacPs_WriteReg(InstancePtr->Config.BaseAddress,
-//				((u32)XEMACPS_LADDR1H_OFFSET + ((u32)IndexLoc * (u32)8)), MacAddr);
-//
-//		Status = (LONG)(XST_SUCCESS);
-//	}
-//	return Status;
-//}
 
 /****************************************************************************/
 /**
@@ -267,52 +220,262 @@ static void XEmacPsErrorHandler(void *Callback, u8 Direction, u32 ErrorWord)
 	EmacPsResetDevice(EmacPsInstancePtr);
 }
 
-/*****************************************************************************/
+/****************************************************************************/
 /**
- * Set the MDIO clock divisor.
- *
- * Calculating the divisor:
- *
- * <pre>
- *              f[HOSTCLK]
- *   f[MDC] = -----------------
- *            (1 + Divisor) * 2
- * </pre>
- *
- * where f[HOSTCLK] is the bus clock frequency in MHz, and f[MDC] is the
- * MDIO clock frequency in MHz to the PHY. Typically, f[MDC] should not
- * exceed 2.5 MHz. Some PHYs can tolerate faster speeds which means faster
- * access. Here is the table to show values to generate MDC,
- *
- * <pre>
- * 000 : divide pclk by   8 (pclk up to  20 MHz)
- * 001 : divide pclk by  16 (pclk up to  40 MHz)
- * 010 : divide pclk by  32 (pclk up to  80 MHz)
- * 011 : divide pclk by  48 (pclk up to 120 MHz)
- * 100 : divide pclk by  64 (pclk up to 160 MHz)
- * 101 : divide pclk by  96 (pclk up to 240 MHz)
- * 110 : divide pclk by 128 (pclk up to 320 MHz)
- * 111 : divide pclk by 224 (pclk up to 540 MHz)
- * </pre>
- *
- * @param InstancePtr is a pointer to the instance to be worked on.
- * @param Divisor is the divisor to set. Range is 0b000 to 0b111.
- *
- *****************************************************************************/
-void XEmacPs_SetMdioDivisor(XEmacPs *InstancePtr, XEmacPs_MdcDiv Divisor)
+* This function resets the device but preserves the options set by the user.
+*
+* The descriptor list could be reinitialized with the same calls to
+* XEmacPs_BdRingClone() as used in main(). Doing this is a matter of
+* preference.
+* In many cases, an OS may have resources tied up in the descriptors.
+* Reinitializing in this case may bad for the OS since its resources may be
+* permamently lost.
+*
+* @param	EmacPsInstancePtr is a pointer to the instance of the EmacPs
+*		driver.
+*
+* @return	XST_SUCCESS if successful, else XST_FAILURE.
+*
+* @note		None.
+*
+*****************************************************************************/
+static LONG EmacPsResetDevice(XEmacPs * EmacPsInstancePtr)
 {
-	u32 Reg;
-	Xil_AssertVoid(InstancePtr != NULL);
-	Xil_AssertVoid(InstancePtr->IsReady == (u32)XIL_COMPONENT_IS_READY);
-	Xil_AssertVoid(Divisor <= (XEmacPs_MdcDiv)0x7); /* only last three bits are valid */
+	LONG Status = 0;
+	u8 MacSave[6];
+	u32 Options;
+	XEmacPs_Bd BdTemplate;
 
-	Reg = XEmacPs_ReadReg(InstancePtr->Config.BaseAddress,
-				XEMACPS_NWCFG_OFFSET);
-	/* clear these three bits, could be done with mask */
-	Reg &= (u32)(~XEMACPS_NWCFG_MDCCLKDIV_MASK);
 
-	Reg |= ((u32)Divisor << XEMACPS_NWCFG_MDC_SHIFT_MASK);
+	/*
+	 * Stop device
+	 */
+	XEmacPs_Stop(EmacPsInstancePtr);
 
-	XEmacPs_WriteReg(InstancePtr->Config.BaseAddress,
-			   XEMACPS_NWCFG_OFFSET, Reg);
+	/*
+	 * Save the device state
+	 */
+	XEmacPs_GetMacAddress(EmacPsInstancePtr, &MacSave, 1);
+	Options = XEmacPs_GetOptions(EmacPsInstancePtr);
+
+	/*
+	 * Stop and reset the device
+	 */
+	XEmacPs_Reset(EmacPsInstancePtr);
+
+	/*
+	 * Restore the state
+	 */
+	XEmacPs_SetMacAddress(EmacPsInstancePtr, &MacSave, 1);
+	Status |= XEmacPs_SetOptions(EmacPsInstancePtr, Options);
+	Status |= XEmacPs_ClearOptions(EmacPsInstancePtr, ~Options);
+	if (Status != XST_SUCCESS) {
+		xil_printf("Error restoring state after reset\n\r");
+		return XST_FAILURE;
+	}
+
+	/*
+	 * Setup callbacks
+	 */
+	Status = XEmacPs_SetHandler(EmacPsInstancePtr,
+				     XEMACPS_HANDLER_DMASEND,
+				     (void *) XEmacPsSendHandler,
+				     EmacPsInstancePtr);
+	Status |= XEmacPs_SetHandler(EmacPsInstancePtr,
+				    XEMACPS_HANDLER_DMARECV,
+				    (void *) XEmacPsRecvHandler,
+				    EmacPsInstancePtr);
+	Status |= XEmacPs_SetHandler(EmacPsInstancePtr, XEMACPS_HANDLER_ERROR,
+				    (void *) XEmacPsErrorHandler,
+				    EmacPsInstancePtr);
+	if (Status != XST_SUCCESS) {
+		xil_printf("Error assigning handlers\n\r");
+		return XST_FAILURE;
+	}
+
+	/*
+	 * Setup RxBD space.
+	 *
+	 * We have already defined a properly aligned area of memory to store
+	 * RxBDs at the beginning of this source code file so just pass its
+	 * address into the function. No MMU is being used so the physical and
+	 * virtual addresses are the same.
+	 *
+	 * Setup a BD template for the Rx channel. This template will be copied
+	 * to every RxBD. We will not have to explicitly set these again.
+	 */
+	XEmacPs_BdClear(&BdTemplate);
+
+	/*
+	 * Create the RxBD ring
+	 */
+	Status = XEmacPs_BdRingCreate(&(XEmacPs_GetRxRing
+				      (EmacPsInstancePtr)),
+				      (UINTPTR) RxBdSpacePtr,
+				      (UINTPTR) RxBdSpacePtr,
+				      XEMACPS_BD_ALIGNMENT,
+				      RXBD_CNT);
+	if (Status != XST_SUCCESS) {
+		xil_printf
+			("Error setting up RxBD space, BdRingCreate\n\r");
+		return XST_FAILURE;
+	}
+
+	Status = XEmacPs_BdRingClone(&
+				      (XEmacPs_GetRxRing(EmacPsInstancePtr)),
+				      &BdTemplate, XEMACPS_RECV);
+	if (Status != XST_SUCCESS) {
+		xil_printf
+			("Error setting up RxBD space, BdRingClone\n\r");
+		return XST_FAILURE;
+	}
+
+	/*
+	 * Setup TxBD space.
+	 *
+	 * Like RxBD space, we have already defined a properly aligned area of
+	 * memory to use.
+	 *
+	 * Also like the RxBD space, we create a template. Notice we don't set
+	 * the "last" attribute. The examples will be overriding this
+	 * attribute so it does no good to set it up here.
+	 */
+	XEmacPs_BdClear(&BdTemplate);
+	XEmacPs_BdSetStatus(&BdTemplate, XEMACPS_TXBUF_USED_MASK);
+
+	/*
+	 * Create the TxBD ring
+	 */
+	Status = XEmacPs_BdRingCreate(&(XEmacPs_GetTxRing
+				      (EmacPsInstancePtr)),
+				      (UINTPTR) TxBdSpacePtr,
+				      (UINTPTR) TxBdSpacePtr,
+				      XEMACPS_BD_ALIGNMENT,
+				      TXBD_CNT);
+	if (Status != XST_SUCCESS) {
+		xil_printf
+			("Error setting up TxBD space, BdRingCreate\n\r");
+		return XST_FAILURE;
+	}
+	Status = XEmacPs_BdRingClone(&
+				      (XEmacPs_GetTxRing(EmacPsInstancePtr)),
+				      &BdTemplate, XEMACPS_SEND);
+	if (Status != XST_SUCCESS) {
+		xil_printf
+			("Error setting up TxBD space, BdRingClone\n\r");
+		return XST_FAILURE;
+	}
+
+	/*
+	 * Restart the device
+	 */
+	XEmacPs_Start(EmacPsInstancePtr);
+
+	return XST_SUCCESS;
+}
+
+/****************************************************************************/
+/**
+*
+* This function detects the PHY address by looking for successful MII status
+* register contents.
+*
+* @param    The XEMACPS driver instance
+*
+* @return   The address of the PHY (defaults to 32 if none detected)
+*
+* @note     None.
+*
+*****************************************************************************/
+
+u32 XEmacPsDetectPHY(XEmacPs * EmacPsInstancePtr)
+{
+	u32 PhyAddr;
+	u32 Status;
+	u16 PhyReg1;
+	u16 PhyReg2;
+
+	for (PhyAddr = 0; PhyAddr <= 31; PhyAddr++) {
+		Status = XEmacPs_PhyRead(EmacPsInstancePtr, PhyAddr,
+					  PHY_DETECT_REG1, &PhyReg1);
+
+		Status |= XEmacPs_PhyRead(EmacPsInstancePtr, PhyAddr,
+					   PHY_DETECT_REG2, &PhyReg2);
+
+		if ((Status == XST_SUCCESS) &&
+		    (PhyReg1 > 0x0000) && (PhyReg1 < 0xffff) &&
+		    (PhyReg2 > 0x0000) && (PhyReg2 < 0xffff)) {
+			/* Found a valid PHY address */
+			return PhyAddr;
+		}
+	}
+
+	return PhyAddr;		/* default to 32(max of iteration) */
+}
+
+LONG phyConfig(XEmacPs * macPtr, u32 speed) {
+	LONG Status = 0;
+	u32 PhyAddr = 0;
+	u16 PhyIdentity;
+
+	//Loop through 32 addresses and return first valid PHY address by reading REG1 & REG2
+	PhyAddr = XEmacPsDetectPHY(macPtr);
+	XEmacPs_PhyRead(macPtr, PhyAddr, PHY_DETECT_REG1, &PhyIdentity);
+	
+	xil_printf("PHY ID: 0x%x\n\rPHY ADDR: 0x%x\n\r", PhyIdentity, PhyAddr);
+
+	//Auto negotiate and Link up
+	if (PhyIdentity == PHY_ID_RTL) {
+		Status = phyAutoNegotiate(macPtr, PhyAddr);
+		Status |= phyLinkStatus(macPtr, PhyAddr);
+	}
+
+	return Status;
+}
+LONG phyAutoNegotiate(XEmacPs * macPtr, u32 PhyAddr) {
+	LONG Status = 0;
+	u16 auto_negotiate = 0;
+	u16 try = 0;
+	u16 PhyReg1;
+
+	while (!auto_negotiate & try < 10) {
+		XEmacPs_PhyRead(macPtr, PhyAddr, 1, &PhyReg1);
+		auto_negotiate = PhyReg1 & PHY_REG1_AUTONEG;
+	    for(u32 i=0; i < 0xff; i++);
+	        sleep(1);
+		try++;
+	}
+
+	if (auto_negotiate) {
+		xil_printf("Auto Negotiation Complete\n\r");
+		Status = XST_SUCCESS;
+	} else {
+		xil_printf("Auto Negotiation Failed\n\r");
+	}
+
+	return Status;
+}
+
+LONG phyLinkStatus(XEmacPs * macPtr, u32 PhyAddr) {
+	LONG Status = 0;
+	u16 link_status = 0;
+	u16 try = 0;
+	u16 PhyReg1;
+
+	while (!link_status & try < 10) {
+		XEmacPs_PhyRead(macPtr, PhyAddr, 1, &PhyReg1);
+		link_status = PhyReg1 & PHY_REG1_LINKSTS;
+	    for(u32 i=0; i < 0xff; i++);
+	        sleep(1);
+		try++;
+	}
+
+	if (link_status) {
+		xil_printf("Link Established\n\r");
+		Status = XST_SUCCESS;
+	} else {
+		xil_printf("Link Not Established\n\r");
+	}
+	
+	return Status;
 }
