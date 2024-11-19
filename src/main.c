@@ -1,6 +1,5 @@
 #include "eth_dma.h"
 #include "ps_gem.h"
-#include "xil_mmu.h"
 
 /*
     1. Initialize the Controller
@@ -17,75 +16,42 @@
 
 int main(void) {
     long Status;
-    /* Initialize the MAC */
     
     XEmacPs_Config *macConfig;
     XEmacPs * macPtr = &macInstance;
     u32 gemVersion;
     u16 macIntrId;
-    
-    macConfig = XEmacPs_LookupConfig(XPAR_XEMACPS_0_DEVICE_ID);
-    Status = XEmacPs_CfgInitialize(macPtr, macConfig, macConfig->BaseAddress);
+    INTC *IntcInstancePtr = &IntcInstance;
 
-    //Interrupt ID
-    macIntrId = XPS_GEM0_INT_ID;
+    /* Initialize the MAC */
+    Status = macInit(macPtr, macIntrId, macConfig, IntcInstancePtr);
+    if (Status != XST_SUCCESS) {
+		xil_printf
+			("Error setting macInit\n\r");
+		return XST_FAILURE;
+	}
 
-    //Configure the Controller
-    // macNwcfgConfig(macPtr);
-    XEmacPsClkSetup(macPtr);
-
-    gemVersion = ((Xil_In32(macConfig->BaseAddress + 0xFC)) >> 16) & 0xFFF;
+    /* Initialize Buffer Descriptor Rings*/
+    Status = bdInit(macPtr);
+    if (Status != XST_SUCCESS) {
+        xil_printf
+            ("Error setting bdInit\n\r");
+        return XST_FAILURE;
+    }
 
     /*
-	 * Set the MAC address
+	 * Setup the interrupt controller and enable interrupts
 	 */
-	Status = XEmacPs_SetMacAddress(macPtr, srcMac, 1);
-	if (Status != XST_SUCCESS) {
-		xil_printf("Error setting MAC address\n\r");
-		return XST_FAILURE;
-	}
+	Status = EmacPsSetupIntrSystem(IntcInstancePtr,
+					macPtr, macIntrId);
 
-    /*
-	 * Setup callbacks
-	*/
-	Status = XEmacPs_SetHandler(macPtr,
-				     XEMACPS_HANDLER_DMASEND,
-				     (void *) XEmacPsSendHandler,
-					 macPtr);
-	Status |=
-		XEmacPs_SetHandler(macPtr,
-				    XEMACPS_HANDLER_DMARECV,
-				    (void *) XEmacPsRecvHandler,
-					macPtr);
-	Status |=
-		XEmacPs_SetHandler(macPtr, XEMACPS_HANDLER_ERROR,
-				    (void *) XEmacPsErrorHandler,
-					macPtr);
-
-	if (Status != XST_SUCCESS) {
-		xil_printf("Error assigning handlers\n\r");
-		return XST_FAILURE;
-	}
-
-    /*
-        * The BDs need to be allocated in uncached memory. Hence the 1 MB
-        * address range that starts at "bd_space" is made uncached.
-    */
-    Xil_SetTlbAttributes((INTPTR)bd_space, DEVICE_MEMORY);
-
-	/* Allocate Rx and Tx BD space each */
-	RxBdSpacePtr = &(bd_space[0]);
-	TxBdSpacePtr = &(bd_space[0x10000]);
-
-    //Maximum divisor, CPU clock is 667MHz
-    XEmacPs_SetMdioDivisor(macPtr, MDC_DIV_224);
-
-    sleep(1);
-
-
-    //Auto negotiate and Establish Link
-    phyConfig(macPtr, EMACPS_LOOPBACK_SPEED_1G);
-
+    // //TODO: Need to setup RX BDs for receive and continuous process of frames
+    // /* Send ARP Message to Host Computer */
+    Status = sendArpRequest(hostIp, &macPtr);
+    if (Status != XST_SUCCESS) {
+        xil_printf("Error sending ARP Request\n\r");
+        return XST_FAILURE;
+    }
     xil_printf("Exiting\n\r");
     return 0;
 }

@@ -1,6 +1,7 @@
 #include "xparameters.h"
 #include "xemacps.h"
 #include "xil_exception.h"
+#include "xil_mmu.h"
 
 
 
@@ -19,6 +20,9 @@
 
 XEmacPs macInstance;
 XScuGic IntcInstance;
+#define INTC		XScuGic
+#define EMACPS_DEVICE_ID	XPAR_XEMACPS_0_DEVICE_ID
+#define INTC_DEVICE_ID		XPAR_SCUGIC_SINGLE_DEVICE_ID
 
 /*
 	PHY Registers
@@ -39,6 +43,12 @@ u32 XEmacPsDetectPHY(XEmacPs * EmacPsInstancePtr);
 */
 //LONG XEmacPs_SetMacAddress(XEmacPs *InstancePtr, void *AddressPtr, u8 Index);
 void XEmacPsClkSetup(XEmacPs *EmacPsInstancePtr);
+static LONG EmacPsSetupIntrSystem(INTC * IntcInstancePtr,
+				  XEmacPs * EmacPsInstancePtr,
+				  u16 EmacPsIntrId);
+
+static void EmacPsDisableIntrSystem(INTC * IntcInstancePtr,
+				     u16 EmacPsIntrId);
 static void XEmacPsSendHandler(void *Callback);
 static void XEmacPsRecvHandler(void *Callback);
 static void XEmacPsErrorHandler(void *Callback, u8 Direction, u32 ErrorWord);
@@ -48,6 +58,9 @@ static LONG EmacPsResetDevice(XEmacPs * EmacPsInstancePtr);
 LONG phyConfig(XEmacPs * macPtr, u32 speed);
 LONG phyAutoNegotiate(XEmacPs * macPtr, u32 PhyAddr);
 LONG phyLinkStatus(XEmacPs * macPtr, u32 PhyAddr);
+
+LONG macInit(XEmacPs * macInstPtr, u16 * macIntrId, XEmacPs_Config * macConfigInstPtr, INTC * IntcInstancePtr);
+LONG bdInit(XEmacPs * macInstPtr);
 
 ///**  @name MDC clock division
 // *  currently supporting 8, 16, 32, 48, 64, 96, 128, 224.
@@ -90,6 +103,35 @@ void XEmacPsClkSetup(XEmacPs *EmacPsInstancePtr)
 /****************************************************************************/
 /**
 *
+* This function disables the interrupts that occur for EmacPs.
+*
+* @param	IntcInstancePtr is the pointer to the instance of the ScuGic
+*		driver.
+* @param	EmacPsIntrId is interrupt ID and is typically
+*		XPAR_<EMACPS_instance>_INTR value from xparameters.h.
+*
+* @return	None.
+*
+* @note		None.
+*
+*****************************************************************************/
+static void EmacPsDisableIntrSystem(INTC * IntcInstancePtr,
+				     u16 EmacPsIntrId)
+{
+	/*
+	 * Disconnect and disable the interrupt for the EmacPs device
+	 */
+#ifdef XPAR_INTC_0_DEVICE_ID
+	XIntc_Disconnect(IntcInstancePtr, EmacPsIntrId);
+#else
+	XScuGic_Disconnect(IntcInstancePtr, EmacPsIntrId);
+#endif
+
+}
+
+/****************************************************************************/
+/**
+*
 * This the Transmit handler callback function and will increment a shared
 * counter that can be shared by the main thread of operation.
 *
@@ -114,8 +156,8 @@ static void XEmacPsSendHandler(void *Callback)
 	 * Increment the counter so that main thread knows something
 	 * happened.
 	 */
-//	FramesTx++;
-//	xil_printf("TX Frame: %u\n\r", FramesTx);
+	FramesTx++;
+	xil_printf("TX Frame: %u\n\r", FramesTx);
 }
 
 
@@ -145,11 +187,11 @@ static void XEmacPsRecvHandler(void *Callback)
 	 * Increment the counter so that main thread knows something
 	 * happened.
 	 */
-//	FramesRx++;
+	FramesRx++;
 	if (EmacPsInstancePtr->Config.IsCacheCoherent == 0) {
 		Xil_DCacheInvalidateRange((UINTPTR)&RxFrame, sizeof(EthernetFrame));
 	}
-//	xil_printf("RX Frame: %u\n\r", FramesRx);
+	xil_printf("RX Frame: %u\n\r", FramesRx);
 }
 
 
@@ -479,3 +521,255 @@ LONG phyLinkStatus(XEmacPs * macPtr, u32 PhyAddr) {
 	
 	return Status;
 }
+
+/****************************************************************************/
+/**
+*
+* This function setups the interrupt system so interrupts can occur for the
+* EMACPS.
+* @param	IntcInstancePtr is a pointer to the instance of the Intc driver.
+* @param	EmacPsInstancePtr is a pointer to the instance of the EmacPs
+*		driver.
+* @param	EmacPsIntrId is the Interrupt ID and is typically
+*		XPAR_<EMACPS_instance>_INTR value from xparameters.h.
+*
+* @return	XST_SUCCESS if successful, otherwise XST_FAILURE.
+*
+* @note		None.
+*
+*****************************************************************************/
+static LONG EmacPsSetupIntrSystem(INTC *IntcInstancePtr,
+				  XEmacPs *EmacPsInstancePtr,
+				  u16 EmacPsIntrId)
+{
+	LONG Status;
+
+	XScuGic_Config *GicConfig;
+	Xil_ExceptionInit();
+
+	/*
+	 * Initialize the interrupt controller driver so that it is ready to
+	 * use.
+	 */
+	GicConfig = XScuGic_LookupConfig(INTC_DEVICE_ID);
+	if (NULL == GicConfig) {
+		return XST_FAILURE;
+	}
+
+	Status = XScuGic_CfgInitialize(IntcInstancePtr, GicConfig,
+		    GicConfig->CpuBaseAddress);
+	if (Status != XST_SUCCESS) {
+		return XST_FAILURE;
+	}
+
+
+	/*
+	 * Connect the interrupt controller interrupt handler to the hardware
+	 * interrupt handling logic in the processor.
+	 */
+	Xil_ExceptionRegisterHandler(XIL_EXCEPTION_ID_IRQ_INT,
+			(Xil_ExceptionHandler)XScuGic_InterruptHandler,
+			IntcInstancePtr);
+
+	/*
+	 * Connect a device driver handler that will be called when an
+	 * interrupt for the device occurs, the device driver handler performs
+	 * the specific interrupt processing for the device.
+	 */
+	Status = XScuGic_Connect(IntcInstancePtr, EmacPsIntrId,
+			(Xil_InterruptHandler) XEmacPs_IntrHandler,
+			(void *) EmacPsInstancePtr);
+	if (Status != XST_SUCCESS) {
+		xil_printf
+			("Unable to connect ISR to interrupt controller\n\r");
+		return XST_FAILURE;
+	}
+
+	/*
+	 * Enable interrupts from the hardware
+	 */
+	XScuGic_Enable(IntcInstancePtr, EmacPsIntrId);
+	/*
+	 * Enable interrupts in the processor
+	 */
+	Xil_ExceptionEnable();
+
+	return XST_SUCCESS;
+}
+
+LONG macInit(XEmacPs * macInstPtr, u16 * macIntrId, XEmacPs_Config * macConfigInstPtr, INTC * IntcInstancePtr) {
+	LONG Status = 0;
+	u32 gemVersion;
+	XEmacPs_Config *macConfig = macConfigInstPtr;
+	XEmacPs *macPtr = macInstPtr;
+	INTC * IntcPtr = IntcInstancePtr;
+	
+
+	//Initialize the MAC
+    macConfig = XEmacPs_LookupConfig(XPAR_XEMACPS_0_DEVICE_ID);
+	Status = XEmacPs_CfgInitialize(macPtr, macConfig, macConfig->BaseAddress);
+	if (Status != XST_SUCCESS) {
+		xil_printf("Error initializing MAC\n\r");
+		return XST_FAILURE;
+	}
+	else {
+		xil_printf("MAC Initialized\n\r");
+	}
+
+	//Interrupt ID
+	*macIntrId = XPAR_XEMACPS_0_INTR;
+	
+	//Configure the Controller
+	XEmacPsClkSetup(macPtr);
+
+	gemVersion = ((Xil_In32(macConfig->BaseAddress + 0xFC)) >> 16) & 0xFFF;
+
+	/*
+	 * Set the MAC address
+	 */
+	Status = XEmacPs_SetMacAddress(macPtr, srcMac, 1);
+	if (Status != XST_SUCCESS) {
+		xil_printf("Error setting MAC address\n\r");
+		return XST_FAILURE;
+	}
+
+	/*
+	 * Setup callbacks
+	 */
+	Status = XEmacPs_SetHandler(macPtr,
+				     XEMACPS_HANDLER_DMASEND,
+				     (void *) XEmacPsSendHandler,
+					 macPtr);
+	Status |=
+		XEmacPs_SetHandler(macPtr,
+				    XEMACPS_HANDLER_DMARECV,
+				    (void *) XEmacPsRecvHandler,
+					macPtr);
+	Status |=
+		XEmacPs_SetHandler(macPtr, XEMACPS_HANDLER_ERROR,
+				    (void *) XEmacPsErrorHandler,
+					macPtr);
+
+	if (Status != XST_SUCCESS) {
+		xil_printf("Error assigning handlers\n\r");
+		return XST_FAILURE;
+	}
+	xil_printf("Handlers assigned\n\r");
+
+	//Setup the interrupt system
+	Status = EmacPsSetupIntrSystem(IntcPtr, macPtr, *macIntrId);
+	if (Status != XST_SUCCESS) {
+		xil_printf("Error setting up interrupt system\n\r");
+		return XST_FAILURE;
+	}
+
+
+	//Maximum divisor, CPU clock is 667MHz
+    XEmacPs_SetMdioDivisor(macPtr, MDC_DIV_224);
+
+    sleep(1);
+
+
+    //Auto negotiate and Establish Link
+    phyConfig(macPtr, EMACPS_LOOPBACK_SPEED_1G);
+
+	xil_printf("Mac Initialization Complete\n\r");
+	return XST_SUCCESS;
+
+}
+
+LONG bdInit(XEmacPs * macInstPtr) {
+	LONG Status = 0;
+	XEmacPs *macPtr = macInstPtr;
+    XEmacPs_Bd BdTemplate;
+
+	/*
+	* The BDs need to be allocated in uncached memory. Hence the 1 MB
+	* address range that starts at "bd_space" is made uncached.
+    */
+    Xil_SetTlbAttributes((INTPTR)bd_space, DEVICE_MEMORY);
+
+	/* Allocate Rx and Tx BD space each */
+	RxBdSpacePtr = &(bd_space[0]);
+	TxBdSpacePtr = &(bd_space[0x10000]);
+
+    /*
+	 * Setup RxBD space.
+	 *
+	 * We have already defined a properly aligned area of memory to store
+	 * RxBDs at the beginning of this source code file so just pass its
+	 * address into the function. No MMU is being used so the physical
+	 * and virtual addresses are the same.
+	 *
+	 * Setup a BD template for the Rx channel. This template will be
+	 * copied to every RxBD. We will not have to explicitly set these
+	 * again.
+	 */
+	XEmacPs_BdClear(&BdTemplate);
+
+	xil_printf("Setting up RX BD Space\n\r");
+	/*
+	 * Create the RxBD ring
+	 */
+	Status = XEmacPs_BdRingCreate(&(XEmacPs_GetRxRing
+				       (macPtr)),
+				       (UINTPTR) RxBdSpacePtr,
+				       (UINTPTR) RxBdSpacePtr,
+				       XEMACPS_BD_ALIGNMENT,
+				       RXBD_CNT);
+	if (Status != XST_SUCCESS) {
+		xil_printf
+			("Error setting up RxBD space, BdRingCreate\n\r");
+		return XST_FAILURE;
+	}
+
+	Status = XEmacPs_BdRingClone(&(XEmacPs_GetRxRing(macPtr)),
+				      &BdTemplate, XEMACPS_RECV);
+	if (Status != XST_SUCCESS) {
+		xil_printf
+			("Error setting up RxBD space, BdRingClone\n\r");
+		return XST_FAILURE;
+	}
+
+	xil_printf("Setting up TX BD Space\n\r");
+	/*
+	 * Setup TxBD space.
+	 *
+	 * Like RxBD space, we have already defined a properly aligned area
+	 * of memory to use.
+	 *
+	 * Also like the RxBD space, we create a template. Notice we don't
+	 * set the "last" attribute. The example will be overriding this
+	 * attribute so it does no good to set it up here.
+	 */
+	XEmacPs_BdClear(&BdTemplate);
+	XEmacPs_BdSetStatus(&BdTemplate, XEMACPS_TXBUF_USED_MASK);
+
+	/*
+	 * Create the TxBD ring
+	 */
+
+	Status = XEmacPs_BdRingCreate(&(XEmacPs_GetTxRing
+				       (macPtr)),
+				       (UINTPTR) TxBdSpacePtr,
+				       (UINTPTR) TxBdSpacePtr,
+				       XEMACPS_BD_ALIGNMENT,
+				       TXBD_CNT);
+                       
+	if (Status != XST_SUCCESS) {
+		xil_printf
+			("Error setting up TxBD space, BdRingCreate\n\r");
+		return XST_FAILURE;
+	}
+
+	Status = XEmacPs_BdRingClone(&(XEmacPs_GetTxRing(macPtr)),
+				      &BdTemplate, XEMACPS_SEND);
+	if (Status != XST_SUCCESS) {
+		xil_printf
+			("Error setting up TxBD space, BdRingClone\n\r");
+		return XST_FAILURE;
+	}
+
+	return Status;
+}
+
