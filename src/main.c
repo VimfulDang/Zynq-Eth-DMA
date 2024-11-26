@@ -45,9 +45,9 @@ int main(void) {
 	Status = EmacPsSetupIntrSystem(IntcInstancePtr,
 					macPtr, macIntrId);
 
-    // //TODO: Need to setup RX BDs for receive and continuous process of frames
-    // /* Send ARP Message to Host Computer */
-    Status = sendArpRequest(hostIp, &macPtr);
+     //TODO: Need to setup RX BDs for receive and continuous process of frames
+     /* Send ARP Message to Host Computer */
+    Status = sendArpRequest(hostIp, macPtr);
     if (Status != XST_SUCCESS) {
         xil_printf("Error sending ARP Request\n\r");
         return XST_FAILURE;

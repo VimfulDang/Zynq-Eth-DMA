@@ -90,14 +90,19 @@ void XEmacPsClkSetup(XEmacPs *EmacPsInstancePtr)
 
 	/* SLCR unlock */
 	*(volatile unsigned int *)(SLCR_UNLOCK_ADDR) = SLCR_UNLOCK_KEY_VALUE;
-		/* GEM0 1G clock configuration*/
-		ClkCntrl =
-		*(volatile unsigned int *)(SLCR_GEM0_CLK_CTRL_ADDR);
-		ClkCntrl &= EMACPS_SLCR_DIV_MASK;
-		ClkCntrl |= (EmacPsInstancePtr->Config.S1GDiv1 << 20);
-		ClkCntrl |= (EmacPsInstancePtr->Config.S1GDiv0 << 8);
-		*(volatile unsigned int *)(SLCR_GEM0_CLK_CTRL_ADDR) =
-								ClkCntrl;
+	/* GEM0 1G clock configuration*/
+	ClkCntrl =
+	*(volatile unsigned int *)(SLCR_GEM0_CLK_CTRL_ADDR);
+	ClkCntrl &= EMACPS_SLCR_DIV_MASK;
+	ClkCntrl |= (EmacPsInstancePtr->Config.S1GDiv1 << 20);
+	ClkCntrl |= (EmacPsInstancePtr->Config.S1GDiv0 << 8);
+	*(volatile unsigned int *)(SLCR_GEM0_CLK_CTRL_ADDR) =
+							ClkCntrl;
+
+	/* SLCR Lock */
+	*(volatile unsigned int *)(SLCR_LOCK_ADDR) = SLCR_LOCK_KEY_VALUE;
+    sleep(1);
+
 }
 
 /****************************************************************************/
@@ -456,22 +461,41 @@ u32 XEmacPsDetectPHY(XEmacPs * EmacPsInstancePtr)
 }
 
 LONG phyConfig(XEmacPs * macPtr, u32 speed) {
-	LONG Status = 0;
-	u32 PhyAddr = 0;
-	u16 PhyIdentity;
 
-	//Loop through 32 addresses and return first valid PHY address by reading REG1 & REG2
-	PhyAddr = XEmacPsDetectPHY(macPtr);
-	XEmacPs_PhyRead(macPtr, PhyAddr, PHY_DETECT_REG1, &PhyIdentity);
-	
-	xil_printf("PHY ID: 0x%x\n\rPHY ADDR: 0x%x\n\r", PhyIdentity, PhyAddr);
+	u16 PhyReg0, PhyReg1, PhyReg10, PhyReg17;
+	u16 auto_negotiate = 0;
+	u16 linkup = 0;
+    u32 PhyAddr = 0;
+    u32 Status = 0;
 
-	//Auto negotiate and Link up
-	if (PhyIdentity == PHY_ID_RTL) {
-		Status = phyAutoNegotiate(macPtr, PhyAddr);
-		Status |= phyLinkStatus(macPtr, PhyAddr);
-	}
+	XEmacPs_PhyRead(macPtr, PhyAddr, 0, &PhyReg0);
+	PhyReg0 |= PHY_REG0_RESET;
+	XEmacPs_PhyWrite(macPtr, PhyAddr, 0, PhyReg0);
+    for(u32 i=0; i < 0xfffff; i++);
+        sleep(1);
 
+//	PhyReg0 |= PHY_REG0_LOOPBACK;
+//	PhyReg0 &= ~PHY_REG0_RESET;
+//	XEmacPs_PhyWrite(EmacPsInstancePtr, PhyAddr, 0, PhyReg0);
+
+	xil_printf("Waiting for Auto Negotiate\n\r");
+	while (!auto_negotiate) {
+		XEmacPs_PhyRead(macPtr, PhyAddr, 1, &PhyReg1);
+		auto_negotiate = PhyReg1 & PHY_REG1_AUTONEG;
+	    for(u32 i=0; i < 0xff; i++);
+	        sleep(1);
+	};
+
+	xil_printf("Auto Negotiate Complete!\n\r");
+	xil_printf("Waiting for link\n\r");
+	while (!linkup) {
+		XEmacPs_PhyRead(macPtr, PhyAddr, 1, &PhyReg1);
+		linkup = PhyReg1 & PHY_REG1_LINKSTS;
+	    for(u32 i=0; i < 0xff; i++);
+	        sleep(1);
+	};
+
+	xil_printf("Link Up!\n\r");
 	return Status;
 }
 LONG phyAutoNegotiate(XEmacPs * macPtr, u32 PhyAddr) {
@@ -480,12 +504,11 @@ LONG phyAutoNegotiate(XEmacPs * macPtr, u32 PhyAddr) {
 	u16 try = 0;
 	u16 PhyReg1;
 
-	while (!auto_negotiate & try < 10) {
+	while (!auto_negotiate) {
 		XEmacPs_PhyRead(macPtr, PhyAddr, 1, &PhyReg1);
 		auto_negotiate = PhyReg1 & PHY_REG1_AUTONEG;
 	    for(u32 i=0; i < 0xff; i++);
 	        sleep(1);
-		try++;
 	}
 
 	if (auto_negotiate) {
@@ -504,12 +527,11 @@ LONG phyLinkStatus(XEmacPs * macPtr, u32 PhyAddr) {
 	u16 try = 0;
 	u16 PhyReg1;
 
-	while (!link_status & try < 10) {
+	while (!link_status) {
 		XEmacPs_PhyRead(macPtr, PhyAddr, 1, &PhyReg1);
 		link_status = PhyReg1 & PHY_REG1_LINKSTS;
 	    for(u32 i=0; i < 0xff; i++);
 	        sleep(1);
-		try++;
 	}
 
 	if (link_status) {
@@ -619,10 +641,12 @@ LONG macInit(XEmacPs * macInstPtr, u16 * macIntrId, XEmacPs_Config * macConfigIn
 	//Interrupt ID
 	*macIntrId = XPAR_XEMACPS_0_INTR;
 	
+    gemVersion = ((Xil_In32(macConfig->BaseAddress + 0xFC)) >> 16) & 0xFFF;
+    
 	//Configure the Controller
 	XEmacPsClkSetup(macPtr);
 
-	gemVersion = ((Xil_In32(macConfig->BaseAddress + 0xFC)) >> 16) & 0xFFF;
+
 
 	/*
 	 * Set the MAC address
@@ -669,10 +693,24 @@ LONG macInit(XEmacPs * macInstPtr, u16 * macIntrId, XEmacPs_Config * macConfigIn
 
     sleep(1);
 
+    XEmacPs_SetOperatingSpeed(macPtr, EMACPS_LOOPBACK_SPEED_1G);
+
+    xil_printf("Base Address: 0x%x\n\r", macConfig->BaseAddress);
+	xil_printf("NW Ctrl: 0x%x\n\r", *((volatile u32*) macConfig->BaseAddress));
+	xil_printf("NW Cfg: 0x%x\n\r", *((volatile u32*) macConfig->BaseAddress + 0x4));
+	xil_printf("DMA Cfg: 0x%x\n\r", *((volatile u32*) macConfig->BaseAddress + 0x10));
+	xil_printf("ISR En: 0x%x\n\r", *((volatile u32*) macConfig->BaseAddress + 0x28));
+	xil_printf("Transmit Status: 0x%x\n\r", *((volatile u32*) macConfig->BaseAddress + 0x14));
+	xil_printf("Receive Status: 0x%x\n\r", *((volatile u32*) macConfig->BaseAddress + 0x20));
+
+
+
 
     //Auto negotiate and Establish Link
     phyConfig(macPtr, EMACPS_LOOPBACK_SPEED_1G);
 
+    //Set MAC Loopback
+	// *((volatile u32*) macPtr->Config.BaseAddress) |= 0x2;
 	xil_printf("Mac Initialization Complete\n\r");
 	return XST_SUCCESS;
 
