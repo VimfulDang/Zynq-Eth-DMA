@@ -39,6 +39,13 @@ u32 XEmacPsDetectPHY(XEmacPs * EmacPsInstancePtr);
 #define PHY_REG1_AUTONEG	0x0020
 
 /*
+ * 	RX DDR Buffer Define
+ *
+ */
+#define RX_BDBUF_LEN		0x800
+#define DDR_BASE			XPAR_PS7_DDR_0_S_AXI_BASEADDR
+
+/*
     Function Prototypes
 */
 //LONG XEmacPs_SetMacAddress(XEmacPs *InstancePtr, void *AddressPtr, u8 Index);
@@ -61,6 +68,26 @@ LONG phyLinkStatus(XEmacPs * macPtr, u32 PhyAddr);
 
 LONG macInit(XEmacPs * macInstPtr, u16 * macIntrId, XEmacPs_Config * macConfigInstPtr, INTC * IntcInstancePtr);
 LONG bdInit(XEmacPs * macInstPtr);
+void SetRxBuf(XEmacPs * macPtr);
+
+
+/*****************************************************************************/
+/**
+ * Set this bit to mark the last descriptor in the receive buffer descriptor
+ * list.
+ *
+ * @param  BdPtr is the BD pointer to operate on
+ *
+ * @note
+ * C-style signature:
+ *    void XEmacPs_BdSetRxWrap(XEmacPs_Bd* BdPtr)
+ *
+ *****************************************************************************/
+#define XEmacPs_BdSetRxWrap(BdPtr)                                 \
+    (XEmacPs_BdWrite((BdPtr), XEMACPS_BD_ADDR_OFFSET,             \
+    XEmacPs_BdRead((BdPtr), XEMACPS_BD_ADDR_OFFSET) |             \
+    XEMACPS_RXBUF_WRAP_MASK))
+
 
 ///**  @name MDC clock division
 // *  currently supporting 8, 16, 32, 48, 64, 96, 128, 224.
@@ -103,6 +130,37 @@ void XEmacPsClkSetup(XEmacPs *EmacPsInstancePtr)
 	*(volatile unsigned int *)(SLCR_LOCK_ADDR) = SLCR_LOCK_KEY_VALUE;
     sleep(1);
 
+}
+
+/****************************************************************************/
+/**
+*
+* This function sets up each RX BD to a buffer address of Ethernet Frame Length
+*
+* @param	Pointer to MAC Structure to get RingPtr
+*
+* @return	None.
+*
+* @note		None.
+*
+*****************************************************************************/
+void SetRxBuf(XEmacPs * macPtr)
+{
+	XEmacPs_BdRing * ringPtr = &(macPtr->RxBdRing);
+	XEmacPs_Bd * bdPtr = (XEmacPs_Bd *) ringPtr->BaseBdAddr;
+
+
+	for(u32 i = 0; i < ringPtr->Length; i++) {
+		//Set buffer address to DDR
+		XEmacPs_BdSetAddressRx(bdPtr, i*RX_BDBUF_LEN + DDR_BASE);
+		//Set Ownership to zero
+		XEmacPs_BdSetStatus(bdPtr, ~XEMACPS_RXBUF_NEW_MASK);
+		bdPtr++;
+	}
+
+	//Points to last Bd
+	bdPtr = (XEmacPs_Bd *) ringPtr->HighBdAddr;
+	XEmacPs_BdSetRxWrap(bdPtr);
 }
 
 /****************************************************************************/
@@ -162,7 +220,7 @@ static void XEmacPsSendHandler(void *Callback)
 	 * happened.
 	 */
 	FramesTx++;
-	xil_printf("TX Frame: %u\n\r", FramesTx);
+//	xil_printf("TX Frame: %u\n\r", FramesTx);
 }
 
 
@@ -193,10 +251,10 @@ static void XEmacPsRecvHandler(void *Callback)
 	 * happened.
 	 */
 	FramesRx++;
-	if (EmacPsInstancePtr->Config.IsCacheCoherent == 0) {
-		Xil_DCacheInvalidateRange((UINTPTR)&RxFrame, sizeof(EthernetFrame));
-	}
-	xil_printf("RX Frame: %u\n\r", FramesRx);
+//	if (EmacPsInstancePtr->Config.IsCacheCoherent == 0) {
+//		Xil_DCacheInvalidateRange((UINTPTR)&RxFrame, sizeof(EthernetFrame));
+//	}
+//	xil_printf("RX Frame: %u\n\r", FramesRx);
 }
 
 
@@ -462,11 +520,10 @@ u32 XEmacPsDetectPHY(XEmacPs * EmacPsInstancePtr)
 
 LONG phyConfig(XEmacPs * macPtr, u32 speed) {
 
-	u16 PhyReg0, PhyReg1, PhyReg10, PhyReg17;
-	u16 auto_negotiate = 0;
-	u16 linkup = 0;
     u32 PhyAddr = 0;
     u32 Status = 0;
+    u32 PhyIdentity = 0;
+    u16 PhyReg0;
 
 	XEmacPs_PhyRead(macPtr, PhyAddr, 0, &PhyReg0);
 	PhyReg0 |= PHY_REG0_RESET;
@@ -478,24 +535,13 @@ LONG phyConfig(XEmacPs * macPtr, u32 speed) {
 //	PhyReg0 &= ~PHY_REG0_RESET;
 //	XEmacPs_PhyWrite(EmacPsInstancePtr, PhyAddr, 0, PhyReg0);
 
-	xil_printf("Waiting for Auto Negotiate\n\r");
-	while (!auto_negotiate) {
-		XEmacPs_PhyRead(macPtr, PhyAddr, 1, &PhyReg1);
-		auto_negotiate = PhyReg1 & PHY_REG1_AUTONEG;
-	    for(u32 i=0; i < 0xff; i++);
-	        sleep(1);
-	};
+	XEmacPs_PhyRead(macPtr, PhyAddr, PHY_DETECT_REG1, &PhyIdentity);
+	//Auto negotiate and Link up
+	if (PhyIdentity == PHY_ID_RTL) {
+		Status = phyAutoNegotiate(macPtr, PhyAddr);
+		Status |= phyLinkStatus(macPtr, PhyAddr);
+	}
 
-	xil_printf("Auto Negotiate Complete!\n\r");
-	xil_printf("Waiting for link\n\r");
-	while (!linkup) {
-		XEmacPs_PhyRead(macPtr, PhyAddr, 1, &PhyReg1);
-		linkup = PhyReg1 & PHY_REG1_LINKSTS;
-	    for(u32 i=0; i < 0xff; i++);
-	        sleep(1);
-	};
-
-	xil_printf("Link Up!\n\r");
 	return Status;
 }
 LONG phyAutoNegotiate(XEmacPs * macPtr, u32 PhyAddr) {
@@ -504,11 +550,12 @@ LONG phyAutoNegotiate(XEmacPs * macPtr, u32 PhyAddr) {
 	u16 try = 0;
 	u16 PhyReg1;
 
-	while (!auto_negotiate) {
+	while (!auto_negotiate & (try < 10)) {
 		XEmacPs_PhyRead(macPtr, PhyAddr, 1, &PhyReg1);
 		auto_negotiate = PhyReg1 & PHY_REG1_AUTONEG;
 	    for(u32 i=0; i < 0xff; i++);
 	        sleep(1);
+		try++;
 	}
 
 	if (auto_negotiate) {
@@ -527,11 +574,12 @@ LONG phyLinkStatus(XEmacPs * macPtr, u32 PhyAddr) {
 	u16 try = 0;
 	u16 PhyReg1;
 
-	while (!link_status) {
+	while (!link_status & (try < 10)) {
 		XEmacPs_PhyRead(macPtr, PhyAddr, 1, &PhyReg1);
 		link_status = PhyReg1 & PHY_REG1_LINKSTS;
 	    for(u32 i=0; i < 0xff; i++);
 	        sleep(1);
+		try++;
 	}
 
 	if (link_status) {
@@ -690,24 +738,12 @@ LONG macInit(XEmacPs * macInstPtr, u16 * macIntrId, XEmacPs_Config * macConfigIn
 
 	//Maximum divisor, CPU clock is 667MHz
     XEmacPs_SetMdioDivisor(macPtr, MDC_DIV_224);
-
-    sleep(1);
-
     XEmacPs_SetOperatingSpeed(macPtr, EMACPS_LOOPBACK_SPEED_1G);
-
-    xil_printf("Base Address: 0x%x\n\r", macConfig->BaseAddress);
-	xil_printf("NW Ctrl: 0x%x\n\r", *((volatile u32*) macConfig->BaseAddress));
-	xil_printf("NW Cfg: 0x%x\n\r", *((volatile u32*) macConfig->BaseAddress + 0x4));
-	xil_printf("DMA Cfg: 0x%x\n\r", *((volatile u32*) macConfig->BaseAddress + 0x10));
-	xil_printf("ISR En: 0x%x\n\r", *((volatile u32*) macConfig->BaseAddress + 0x28));
-	xil_printf("Transmit Status: 0x%x\n\r", *((volatile u32*) macConfig->BaseAddress + 0x14));
-	xil_printf("Receive Status: 0x%x\n\r", *((volatile u32*) macConfig->BaseAddress + 0x20));
-
-
-
+    sleep(1);
 
     //Auto negotiate and Establish Link
     phyConfig(macPtr, EMACPS_LOOPBACK_SPEED_1G);
+
 
     //Set MAC Loopback
 	// *((volatile u32*) macPtr->Config.BaseAddress) |= 0x2;
@@ -720,6 +756,7 @@ LONG bdInit(XEmacPs * macInstPtr) {
 	LONG Status = 0;
 	XEmacPs *macPtr = macInstPtr;
     XEmacPs_Bd BdTemplate;
+    XEmacPs_Bd * bdRxPtr;
 
 	/*
 	* The BDs need to be allocated in uncached memory. Hence the 1 MB
@@ -769,7 +806,12 @@ LONG bdInit(XEmacPs * macInstPtr) {
 		return XST_FAILURE;
 	}
 
-	xil_printf("Setting up TX BD Space\n\r");
+	bdRxPtr = (XEmacPs_Bd *) &macPtr->RxBdRing.BaseBdAddr;
+	SetRxBuf(macPtr);
+    Status = XEmacPs_BdRingToHw(&(XEmacPs_GetRxRing(macPtr)),
+                RXBD_CNT, bdRxPtr);
+
+
 	/*
 	 * Setup TxBD space.
 	 *
@@ -780,6 +822,8 @@ LONG bdInit(XEmacPs * macInstPtr) {
 	 * set the "last" attribute. The example will be overriding this
 	 * attribute so it does no good to set it up here.
 	 */
+
+    xil_printf("Setting up TX BD Space\n\r");
 	XEmacPs_BdClear(&BdTemplate);
 	XEmacPs_BdSetStatus(&BdTemplate, XEMACPS_TXBUF_USED_MASK);
 

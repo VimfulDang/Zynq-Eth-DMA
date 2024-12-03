@@ -19,8 +19,8 @@ int main(void) {
     
     XEmacPs_Config *macConfig;
     XEmacPs * macPtr = &macInstance;
-    u32 gemVersion;
-    u16 macIntrId;
+//    u32 gemVersion;
+    u16 macIntrId = 0;
     INTC *IntcInstancePtr = &IntcInstance;
 
     /* Initialize the MAC */
@@ -30,7 +30,6 @@ int main(void) {
 			("Error setting macInit\n\r");
 		return XST_FAILURE;
 	}
-
     /* Initialize Buffer Descriptor Rings*/
     Status = bdInit(macPtr);
     if (Status != XST_SUCCESS) {

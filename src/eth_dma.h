@@ -21,7 +21,9 @@ typedef char EthernetFrame[XEMACPS_MAX_FRAME_SIZE]
 
 
 EthernetFrame TxFrame;		/* Transmit buffer */
-EthernetFrame RxFrame;		/* Receive buffer */
+EthernetFrame * RxFrame = XPAR_PS7_DDR_0_S_AXI_BASEADDR;		/* Receive buffer */
+
+
 
 u8 bd_space[0x100000] __attribute__ ((aligned (0x100000)));
 u8 * RxBdSpacePtr;
@@ -118,54 +120,15 @@ LONG sendArpRequest(char * dstIp, XEmacPs * macPtr) {
     LONG Status = 0;
     u32 TxFrameLength;
     XEmacPs_Bd * Bd1Ptr;
-	XEmacPs_Bd *BdRxPtr;
-    u32 NumRxBuf = 0;
 	u32 RxFrLen;
     FramesTx = 0;
     FramesRx = 0;
-
-    NumRxBuf;
-
-    XEmacPs_Config Config = macPtr->Config;
 
     Status = ethHdr(&TxFrame, broadCastMac, srcMac, htons(ETH_IP4_TYPE));
     Status |= ethFrameArp(&TxFrame, dstIp);
 
 	TxFrameLength = 64;
-	/*
-	 * Clear out receive packet memory area
-	 */
-	EmacPsUtilFrameMemClear(&RxFrame);
 
-	if (macPtr->Config.IsCacheCoherent == 0) {
-		Xil_DCacheFlushRange((UINTPTR)&RxFrame, sizeof(EthernetFrame));
-	}
-
-	/*
-	 * Allocate RxBDs since we do not know how many BDs will be used
-	 * in advance, use RXBD_CNT here.
-	 */
-	Status = XEmacPs_BdRingAlloc(&(XEmacPs_GetRxRing(macPtr)),
-				      1, &BdRxPtr);
-
-
-	/*
-	 * Setup the BD. The XEmacPs_BdRingClone() call will mark the
-	 * "wrap" field for last RxBD. Setup buffer address to associated
-	 * BD.
-	 */
-
-	XEmacPs_BdSetAddressRx(BdRxPtr, (UINTPTR)&RxFrame);
-
-	/*
-	 * Enqueue to HW
-	 */
-	Status = XEmacPs_BdRingToHw(&(XEmacPs_GetRxRing(macPtr)),
-				    1, BdRxPtr);
-
-
-	XEmacPs_BdDump(BdRxPtr);
-    
     //Flush the frame from cache
     if (macPtr->Config.IsCacheCoherent == 0) {
 		Xil_DCacheFlushRange((UINTPTR)&TxFrame, sizeof(EthernetFrame));
@@ -208,90 +171,69 @@ LONG sendArpRequest(char * dstIp, XEmacPs * macPtr) {
 
     xil_printf("Queuing Block Descriptor\n\r");
     XEmacPs_SetQueuePtr(macPtr, macPtr->RxBdRing.BaseBdAddr, 0, XEMACPS_RECV);
-    XEmacPs_SetQueuePtr(macPtr, macPtr->TxBdRing.BaseBdAddr, 0, XEMACPS_SEND);
+//    XEmacPs_SetQueuePtr(macPtr, macPtr->TxBdRing.BaseBdAddr, 0, XEMACPS_SEND);
 
     xil_printf("Starting MAC\n\r");
 
     XEmacPs_BdDump(Bd1Ptr);
 
-    XEmacPs_Start(macPtr);
+//    XEmacPs_Start(macPtr);
 
     xil_printf("Transmitting Frame\n\r");
 
-    XEmacPs_Transmit(macPtr);
+    for(int i = 0; i < 10; i++) {
+		FramesTx = 0;
+		FramesRx = 0;
+		xil_printf("Bd Addr: %p\n\r", (void *) Bd1Ptr);
+	    XEmacPs_SetQueuePtr(macPtr, (UINTPTR) Bd1Ptr, 0, XEMACPS_SEND);
+        /* Enable TX and RX interrupts */
+        XEmacPs_IntEnable(macPtr, (XEMACPS_IXR_TX_ERR_MASK |
+        		XEMACPS_IXR_RX_ERR_MASK | (u32)XEMACPS_IXR_FRAMERX_MASK |
+				(u32)XEMACPS_IXR_TXCOMPL_MASK));
+        XEmacPs_Start(macPtr);
+		XEmacPs_Transmit(macPtr);
+		while (!FramesTx);
 
-    while (!FramesTx);
+		if (XEmacPs_BdRingFromHwTx(&(XEmacPs_GetTxRing(macPtr)),
+						1, &Bd1Ptr) == 0) {
+			xil_printf
+				("TxBDs were not ready for post processing\n\r");
+			return XST_FAILURE;
+		}
 
-	// /*
-	//  * Wait for transmission to complete
-	//  */
-	// xil_printf("Base Address: 0x%x\n\r", Config.BaseAddress);
-	// xil_printf("NW Ctrl: 0x%x\n\r", *((volatile u32*) Config.BaseAddress));
-	// xil_printf("NW Cfg: 0x%x\n\r", *((volatile u32*) Config.BaseAddress + 0x4));
-	// xil_printf("DMA Cfg: 0x%x\n\r", *((volatile u32*) Config.BaseAddress + 0x10));
-	// xil_printf("ISR En: 0x%x\n\r", *((volatile u32*) Config.BaseAddress + 0x28));
-	// xil_printf("Transmit Status: 0x%x\n\r", *((volatile u32*) Config.BaseAddress + 0x14));
-	// xil_printf("Receive Status: 0x%x\n\r", *((volatile u32*) Config.BaseAddress + 0x20));
+		Status = XEmacPs_BdRingFree(&(XEmacPs_GetTxRing(macPtr)),
+						 1, Bd1Ptr);
 
-    // u16 PhyReg0, PhyReg10, PhyReg17, PhyReg1, PhyReg24, PhyReg18, PhyReg19, PhyReg13;
-    // u32 PhyAddr = 0;
+		if (Status != XST_SUCCESS) {
+			xil_printf("Error freeing up TxBDs\n\r");
+			return XST_FAILURE;
+		}
 
-    // XEmacPs_PhyRead(macPtr, PhyAddr, 0x0, &PhyReg0);
-	// XEmacPs_PhyRead(macPtr, PhyAddr, 0x1, &PhyReg1);
-	// XEmacPs_PhyRead(macPtr, PhyAddr, 0xA, &PhyReg10);
-    // XEmacPs_PhyRead(macPtr, PhyAddr, 0xC, &PhyReg13);
-	// XEmacPs_PhyRead(macPtr, PhyAddr, 0x11, &PhyReg17);
-	// XEmacPs_PhyRead(macPtr, PhyAddr, 0x12, &PhyReg18);
-	// XEmacPs_PhyRead(macPtr, PhyAddr, 0x13, &PhyReg19);
-	// XEmacPs_PhyRead(macPtr, PhyAddr, 0x18, &PhyReg24);
-	// xil_printf("Reg0: 0x%x\n\r", PhyReg0);
-	// xil_printf("Reg1: 0x%x\n\r", PhyReg1);
-	// xil_printf("Reg10: 0x%x\n\r", PhyReg10);
-	// xil_printf("Reg13: 0x%x\n\r", PhyReg13);
-	// xil_printf("Reg17: 0x%x\n\r", PhyReg17);
-	// xil_printf("Reg18: 0x%x\n\r", PhyReg18);
-	// xil_printf("Reg19: 0x%x\n\r", PhyReg19);
-	// xil_printf("Reg24: 0x%x\n\r", PhyReg24);
-
-    if (XEmacPs_BdRingFromHwTx(&(XEmacPs_GetTxRing(macPtr)),
-				    1, &Bd1Ptr) == 0) {
-    	xil_printf
-			("TxBDs were not ready for post processing\n\r");
-		return XST_FAILURE;
-	}
-
-    Status = XEmacPs_BdRingFree(&(XEmacPs_GetTxRing(macPtr)),
-				     1, Bd1Ptr);
-
-	if (Status != XST_SUCCESS) {
-		xil_printf("Error freeing up TxBDs\n\r");
-		return XST_FAILURE;
-	}
-
-    while (!FramesRx);
-
-	/*
-	 * Wait for Rx indication
-	 */
-
-
-	/*
-	 * Now that the frame has been received, post process our RxBD.
-	 * Since we have submitted to hardware, then there should be only 1
-	 * ready for post processing.
-	 */
-	NumRxBuf = XEmacPs_BdRingFromHwRx(&(XEmacPs_GetRxRing
-					  (macPtr)), 1,
-					 &BdRxPtr);
-
-	/*
-	 * There is no device status to check. If there was a DMA error,
-	 * it should have been reported to the error handler. Check the
-	 * receive lengthi against the transmitted length, then verify
-	 * the data.
-	 */
-	RxFrLen = XEmacPs_BdGetLength(BdRxPtr);
-    xil_printf("Received Frame Length: %d\n\r", RxFrLen);
+		while (!FramesRx);
+		Status = XEmacPs_BdRingAlloc(&(XEmacPs_GetTxRing(macPtr)),
+					      1, &Bd1Ptr);
+		if (Status != XST_SUCCESS) {
+			xil_printf("Error allocating TxBD\n\r");
+			return XST_FAILURE;
+		}
+	    XEmacPs_BdSetAddressTx(Bd1Ptr, (UINTPTR)&TxFrame);
+		XEmacPs_BdSetLength(Bd1Ptr, TxFrameLength);
+		XEmacPs_BdClearTxUsed(Bd1Ptr);
+		XEmacPs_BdSetLast(Bd1Ptr);
+	    /*
+		 * Enqueue to HW
+		 */
+		Status = XEmacPs_BdRingToHw(&(XEmacPs_GetTxRing(macPtr)),
+					     1, Bd1Ptr);
+		if (Status != XST_SUCCESS) {
+			xil_printf("Error committing TxBD to HW\n\r");
+			return XST_FAILURE;
+		}
+		if (macPtr->Config.IsCacheCoherent == 0) {
+			Xil_DCacheFlushRange((UINTPTR)Bd1Ptr, sizeof(XEmacPs_Bd));
+		}
+		xil_printf("Try %d\n\r", i);
+    }
     
     return Status;
 }
