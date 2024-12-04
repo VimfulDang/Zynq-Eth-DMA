@@ -39,6 +39,24 @@ u32 XEmacPsDetectPHY(XEmacPs * EmacPsInstancePtr);
 #define PHY_REG1_AUTONEG	0x0020
 
 /*
+    GEM Registers
+*/
+#define RXSR_OFFSET         0x00000020  //RX Status
+#define RXSR_BUFNA_MASK     0x00000001  //Buffer Not Available as it is owned by processor
+#define RXSR_FRAMERX_MASK   0x00000002 //Frame Received
+#define RXSR_RXOVR_MASK     0x00000004 //Receive Overrun
+#define RXSR_HRESPNOK_MASK  0x00000008 //Hresp not OK
+
+#define ISR_OFFSET          0x00000024  //Interrupt Status
+#define ISR_FRAMERX_MASK    0x00000002  //Frame Received
+#define ISR_RXUSED_MASK     0x00000004  //Rx Bd used bit set
+#define ISR_TXUSED_MASK     0x00000008  //Tx Bd used bit set
+#define ISR_RXOVR_MASK      0x00000400  //Receive Overrun
+#define ISR_HREPNOK_MASK    0x00000800  //Hresp not OK
+
+#define IER     0x00000028  //Interrupt Enable
+
+/*
  * 	RX DDR Buffer Define
  *
  */
@@ -239,22 +257,36 @@ static void XEmacPsSendHandler(void *Callback)
 *****************************************************************************/
 static void XEmacPsRecvHandler(void *Callback)
 {
-	XEmacPs *EmacPsInstancePtr = (XEmacPs *) Callback;
+	XEmacPs *macPtr = (XEmacPs *) Callback;
 
 	/*
 	 * Disable the transmit related interrupts
 	 */
-	XEmacPs_IntDisable(EmacPsInstancePtr, (XEMACPS_IXR_FRAMERX_MASK |
+	XEmacPs_IntDisable(macPtr, (XEMACPS_IXR_FRAMERX_MASK |
 		XEMACPS_IXR_RX_ERR_MASK));
 	/*
 	 * Increment the counter so that main thread knows something
 	 * happened.
 	 */
 	FramesRx++;
-//	if (EmacPsInstancePtr->Config.IsCacheCoherent == 0) {
-//		Xil_DCacheInvalidateRange((UINTPTR)&RxFrame, sizeof(EthernetFrame));
-//	}
-//	xil_printf("RX Frame: %u\n\r", FramesRx);
+
+    //Read RX Status Register
+    u32 RxStatus = XEmacPs_ReadReg(macPtr->Config.BaseAddress, RXSR_OFFSET);
+    //Clear out reserved bit[31:4] and Rx Frame bit
+    if (RxStatus & ~(RXSR_FRAMERX_MASK | 0xFFFFFFF0)) {
+        FramesRxErr++;
+    }
+
+    //Clear out the RX Status Register
+    XEmacPs_WriteReg(macPtr->Config.BaseAddress, RXSR_OFFSET, 0xF);
+
+    //Clear out the ISR
+    XEmacPs_WriteReg(macPtr->Config.BaseAddress, ISR_OFFSET, \
+        (ISR_FRAMERX_MASK | ISR_RXUSED_MASK | ISR_RXOVR_MASK | ISR_HREPNOK_MASK));
+
+    //Re-enable the interrupts
+    XEmacPs_IntEnable(macPtr, (XEMACPS_IXR_FRAMERX_MASK | XEMACPS_IXR_RX_ERR_MASK));
+
 }
 
 
@@ -811,7 +843,7 @@ LONG bdInit(XEmacPs * macInstPtr) {
     Status = XEmacPs_BdRingToHw(&(XEmacPs_GetRxRing(macPtr)),
                 RXBD_CNT, bdRxPtr);
 
-
+    XEmacPs_SetQueuePtr(macPtr, macPtr->RxBdRing.BaseBdAddr, 0, XEMACPS_RECV);
 	/*
 	 * Setup TxBD space.
 	 *

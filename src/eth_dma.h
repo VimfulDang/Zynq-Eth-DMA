@@ -30,16 +30,23 @@ u8 * RxBdSpacePtr;
 u8 * TxBdSpacePtr;
 
 
+
+
 #define RXBD_CNT       32	/* Number of RxBDs to use */
 #define TXBD_CNT       32	/* Number of TxBDs to use */
 
-volatile s32 FramesRx;		/* Frames have been received */
+volatile s32 FramesRx=0;		/* Frames have been received */
+volatile s32 RxProcessed=0;    /* Frames have been processed */
+volatile s32 FramesRxErr=0;	/* Number of receive errors */
+volatile u32 RxStatus=0;    /* Status of the last received frame */
+
 volatile s32 FramesTx;		/* Frames have been sent */
 volatile s32 DeviceErrors;	/* Number of errors */
 
 char srcMac[] = { 0x00, 0x18, 0x3E, 0x03, 0x61, 0x7D};
 char srcIp[] = {192, 168, 1, 10};
 
+char hostMac[6] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 char hostIp[] = {192, 168, 1, 103};
 
 char broadCastMac[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
@@ -52,6 +59,12 @@ void XEmacPs_BdDump(XEmacPs_Bd * BdPtr);
 void EmacPsUtilFrameMemClear(EthernetFrame * FramePtr);
 
 typedef struct {
+    uint8_t dest_addr[6];   // Destination MAC address
+    uint8_t src_addr[6];    // Source MAC address
+    uint16_t frame_type;    // Ethernet frame type
+} __attribute__((packed)) ethHdr;
+
+typedef struct {
     uint16_t htype;        // Hardware Type
     uint16_t ptype;        // Protocol Type
     uint8_t  hlen;         // Hardware Address Length
@@ -61,7 +74,7 @@ typedef struct {
     uint8_t  spa[4];       // Sender Protocol Address (IP)
     uint8_t  tha[6];       // Target Hardware Address (MAC)
     uint8_t  tpa[4];       // Target Protocol Address (IP)
-} __attribute__((packed)) ArpPkt;
+} __attribute__((packed)) arpPkt;
 
 uint16_t htons(uint16_t hostshort) {
     // Check the endianess of the system
@@ -120,9 +133,7 @@ LONG sendArpRequest(char * dstIp, XEmacPs * macPtr) {
     LONG Status = 0;
     u32 TxFrameLength;
     XEmacPs_Bd * Bd1Ptr;
-	u32 RxFrLen;
     FramesTx = 0;
-    FramesRx = 0;
 
     Status = ethHdr(&TxFrame, broadCastMac, srcMac, htons(ETH_IP4_TYPE));
     Status |= ethFrameArp(&TxFrame, dstIp);
@@ -154,7 +165,7 @@ LONG sendArpRequest(char * dstIp, XEmacPs * macPtr) {
 	XEmacPs_BdClearTxUsed(Bd1Ptr);
 	XEmacPs_BdSetLast(Bd1Ptr);
 
-	xil_printf("Finished initializing TxFrame\n\r");
+//	xil_printf("Finished initializing TxFrame\n\r");
 
     /*
 	 * Enqueue to HW
@@ -169,72 +180,102 @@ LONG sendArpRequest(char * dstIp, XEmacPs * macPtr) {
 		Xil_DCacheFlushRange((UINTPTR)Bd1Ptr, TxFrameLength);
 	}
 
-    xil_printf("Queuing Block Descriptor\n\r");
-    XEmacPs_SetQueuePtr(macPtr, macPtr->RxBdRing.BaseBdAddr, 0, XEMACPS_RECV);
+//    xil_printf("Queuing Block Descriptor\n\r");
+    // XEmacPs_SetQueuePtr(macPtr, macPtr->RxBdRing.BaseBdAddr, 0, XEMACPS_RECV);
 //    XEmacPs_SetQueuePtr(macPtr, macPtr->TxBdRing.BaseBdAddr, 0, XEMACPS_SEND);
 
-    xil_printf("Starting MAC\n\r");
-
-    XEmacPs_BdDump(Bd1Ptr);
+//    xil_printf("Starting MAC\n\r");
 
 //    XEmacPs_Start(macPtr);
 
-    xil_printf("Transmitting Frame\n\r");
+//    xil_printf("Transmitting Frame\n\r");
 
-    for(int i = 0; i < 10; i++) {
-		FramesTx = 0;
-		FramesRx = 0;
-		xil_printf("Bd Addr: %p\n\r", (void *) Bd1Ptr);
-	    XEmacPs_SetQueuePtr(macPtr, (UINTPTR) Bd1Ptr, 0, XEMACPS_SEND);
-        /* Enable TX and RX interrupts */
-        XEmacPs_IntEnable(macPtr, (XEMACPS_IXR_TX_ERR_MASK |
-        		XEMACPS_IXR_RX_ERR_MASK | (u32)XEMACPS_IXR_FRAMERX_MASK |
-				(u32)XEMACPS_IXR_TXCOMPL_MASK));
-        XEmacPs_Start(macPtr);
-		XEmacPs_Transmit(macPtr);
-		while (!FramesTx);
+    // for(int i = 0; i < 10; i++) {
 
-		if (XEmacPs_BdRingFromHwTx(&(XEmacPs_GetTxRing(macPtr)),
-						1, &Bd1Ptr) == 0) {
-			xil_printf
-				("TxBDs were not ready for post processing\n\r");
-			return XST_FAILURE;
-		}
+    XEmacPs_SetQueuePtr(macPtr, (UINTPTR) Bd1Ptr, 0, XEMACPS_SEND);
+    /* Enable TX and RX interrupts */
+    XEmacPs_IntEnable(macPtr, (XEMACPS_IXR_TX_ERR_MASK | (u32)XEMACPS_IXR_TXCOMPL_MASK));
+    XEmacPs_Start(macPtr);
+    XEmacPs_Transmit(macPtr);
+    while (!FramesTx);
 
-		Status = XEmacPs_BdRingFree(&(XEmacPs_GetTxRing(macPtr)),
-						 1, Bd1Ptr);
-
-		if (Status != XST_SUCCESS) {
-			xil_printf("Error freeing up TxBDs\n\r");
-			return XST_FAILURE;
-		}
-
-		while (!FramesRx);
-		Status = XEmacPs_BdRingAlloc(&(XEmacPs_GetTxRing(macPtr)),
-					      1, &Bd1Ptr);
-		if (Status != XST_SUCCESS) {
-			xil_printf("Error allocating TxBD\n\r");
-			return XST_FAILURE;
-		}
-	    XEmacPs_BdSetAddressTx(Bd1Ptr, (UINTPTR)&TxFrame);
-		XEmacPs_BdSetLength(Bd1Ptr, TxFrameLength);
-		XEmacPs_BdClearTxUsed(Bd1Ptr);
-		XEmacPs_BdSetLast(Bd1Ptr);
-	    /*
-		 * Enqueue to HW
-		 */
-		Status = XEmacPs_BdRingToHw(&(XEmacPs_GetTxRing(macPtr)),
-					     1, Bd1Ptr);
-		if (Status != XST_SUCCESS) {
-			xil_printf("Error committing TxBD to HW\n\r");
-			return XST_FAILURE;
-		}
-		if (macPtr->Config.IsCacheCoherent == 0) {
-			Xil_DCacheFlushRange((UINTPTR)Bd1Ptr, sizeof(XEmacPs_Bd));
-		}
-		xil_printf("Try %d\n\r", i);
+    if (XEmacPs_BdRingFromHwTx(&(XEmacPs_GetTxRing(macPtr)),
+                    1, &Bd1Ptr) == 0) {
+        xil_printf
+            ("TxBDs were not ready for post processing\n\r");
+        return XST_FAILURE;
     }
+
+    Status = XEmacPs_BdRingFree(&(XEmacPs_GetTxRing(macPtr)),
+                        1, Bd1Ptr);
+
+    if (Status != XST_SUCCESS) {
+        xil_printf("Error freeing up TxBDs\n\r");
+        return XST_FAILURE;
+    }
+
+		// while (!FramesRx);
+		// Status = XEmacPs_BdRingAlloc(&(XEmacPs_GetTxRing(macPtr)),
+		// 			      1, &Bd1Ptr);
+		// if (Status != XST_SUCCESS) {
+		// 	xil_printf("Error allocating TxBD\n\r");
+		// 	return XST_FAILURE;
+		// }
+	    // XEmacPs_BdSetAddressTx(Bd1Ptr, (UINTPTR)&TxFrame);
+		// XEmacPs_BdSetLength(Bd1Ptr, TxFrameLength);
+		// XEmacPs_BdClearTxUsed(Bd1Ptr);
+		// XEmacPs_BdSetLast(Bd1Ptr);
+	    // /*
+		//  * Enqueue to HW
+		//  */
+		// Status = XEmacPs_BdRingToHw(&(XEmacPs_GetTxRing(macPtr)),
+		// 			     1, Bd1Ptr);
+		// if (Status != XST_SUCCESS) {
+		// 	xil_printf("Error committing TxBD to HW\n\r");
+		// 	return XST_FAILURE;
+		// }
+		// if (macPtr->Config.IsCacheCoherent == 0) {
+		// 	Xil_DCacheFlushRange((UINTPTR)Bd1Ptr, sizeof(XEmacPs_Bd));
+		// }
+		// xil_printf("Try %d\n\r", i);
+    // }
     
+    return Status;
+}
+
+/****************************************************************************/
+/**
+* This function places an ARP packet into the receiving Frame
+*
+* @param    FramePtr is a pointer to the frame to change.
+* @param    Destination MAC 6 Bytes
+* @param    Source MAC 6 Bytes
+* @param    Type of Ethernet Frame 2 Bytes
+*
+* @return   Success or Failure.
+*
+* @note     None.
+*
+*****************************************************************************/
+LONG arpProcess(EthernetFrame * FramePtr, char * dstMac, char * srcMac, u16 type) {
+    LONG Status = XST_SUCCESS;
+
+    if (FramePtr == NULL) {
+        return XST_FAILURE;
+    }
+
+    char * ptr = (char *) FramePtr;
+
+    /* Set the destination MAC address */
+    memcpy((void *) ptr, (void *) dstMac, 6);
+    ptr += 6;
+
+    /* Set the source MAC address */
+    memcpy((void *) ptr, (void *) srcMac, 6);
+    ptr += 6;
+
+    /* Set the Ethernet type */
+    memcpy((void *) ptr, (void *) &type, 2);
     return Status;
 }
 
@@ -290,7 +331,7 @@ LONG ethFrameArp(EthernetFrame * FramePtr, char * DstIp) {
     LONG Status = XST_SUCCESS;
 
 	u8 *arpPtr = (u8 *)FramePtr + 14; // Dst MAC(6) + Src MAC(6) + Type(2)
-	ArpPkt * Ptr = (ArpPkt *) arpPtr;
+	arpPkt * Ptr = (arpPkt *) arpPtr;
 	Ptr->htype = htons(0x0001); //Ethernet
 	Ptr->ptype = htons(0x0800); //IPv4
 	Ptr->hlen = 0x06; //hardware Address length
