@@ -51,30 +51,46 @@ int main(void) {
     //     xil_printf("Error sending ARP Request\n\r");
     //     return XST_FAILURE;
     // }
-    while ((FramesRx < 10) & (FramesRxErr < 1)) {
-        if (FramesRx > RxProcessed) {
-            xil_printf("FramesRx: %d\n\rRxProcessed: %d\n\r", FramesRx, RxProcessed);
-            XEmacPs_Bd * bdPtr = (XEmacPs_Bd *) macPtr->RxBdRing.BaseBdAddr + macPtr->RxBdRing.Separation*RxProcessed;
+    int arpCnt = 0;
+    while (arpCnt < 10) {
+        while (FramesRx > RxProcessed) {
+            // xil_printf("FramesRx: %d\n\rRxProcessed: %d\n\r", FramesRx, RxProcessed);
+            XEmacPs_Bd * bdPtr = ((XEmacPs_Bd *) macPtr->RxBdRing.BaseBdAddr) + (RxProcessed % macPtr->RxBdRing.Length);
+            // xil_printf("BaseAddr: %p\tbdPtr:%p\n\r", macPtr->RxBdRing.BaseBdAddr, bdPtr);
             //Wraps bdPtr around
             if (((UINTPTR) bdPtr) > macPtr->RxBdRing.HighBdAddr) {
                 bdPtr -= macPtr->RxBdRing.Length;
             }
             //Read the used bit and make sure it's asserted
             if (XEmacPs_BdIsRxNew(bdPtr)) {
-                ethHdr * ethHdrPtr = (ethHdr *) XEmacPs_BdGetAddressRx(bdPtr);
+                ethHdr_t * ethHdrPtr = (ethHdr_t *) (XEmacPs_BdGetBufAddr(bdPtr) & XEMACPS_RXBUF_ADD_MASK);
+                // xil_printf("Buffer Address: %p\n\r", ethHdrPtr);
                 //Check if frame is an ARP packet
-                if (ethHdrPtr->frame_type == htons(0x0808)) {
-                    arpProcess((arpPkt *) (ethHdrPtr + 1), macPtr);
+                xil_printf("Destination MAC: %02x:%02x:%02x:%02x:%02x:%02x\n\r",
+                           ethHdrPtr->dest_addr[0], ethHdrPtr->dest_addr[1], ethHdrPtr->dest_addr[2],
+                           ethHdrPtr->dest_addr[3], ethHdrPtr->dest_addr[4], ethHdrPtr->dest_addr[5]);
+                xil_printf("Source MAC: %02x:%02x:%02x:%02x:%02x:%02x\n\r",
+                           ethHdrPtr->src_addr[0], ethHdrPtr->src_addr[1], ethHdrPtr->src_addr[2],
+                           ethHdrPtr->src_addr[3], ethHdrPtr->src_addr[4], ethHdrPtr->src_addr[5]);
+                xil_printf("ETH Type: 0x%04x\n\r", ntohs(ethHdrPtr->frame_type));
+                if (ethHdrPtr->frame_type == ntohs(0x0806)) {
+//                    arpProcess((arpPkt_t *) (ethHdrPtr + 1), macPtr);
+                	xil_printf("Found ARP Frame\n\r");
+                    arpCnt++;
                 }
-                xil_printf("Frame Length: %d\n\r", XEmacPs_BdGetLength(bdPtr));
+                // if (XEmacPs_BdIsLast(bdPtr))
+                	// xil_printf("Bd has last\n\r");
+                // xil_printf("Frame Length: %d\n\r", XEmacPs_BdGetLength(bdPtr));
+                XEmacPs_BdClearRxNew(bdPtr);
                 RxProcessed++;
             }
             //Clear Used Bit
-            XEmacPs_BdClearRxNew(bdPtr);
-            sleep(1);
-            Status = sendArpRequest(hostIp, macPtr);
         }
+        sleep(5);
+        Status = sendArpRequest(hostIp, macPtr);
     }
+	XEmacPs_IntDisable(macPtr, (XEMACPS_IXR_FRAMERX_MASK |
+		XEMACPS_IXR_RX_ERR_MASK));
     xil_printf("FramesRx: %d\n\rFramesRxErr: %d\n\r", FramesRx, FramesRxErr);
     xil_printf("Exiting\n\r");
     return 0;

@@ -35,13 +35,13 @@ u8 * TxBdSpacePtr;
 #define RXBD_CNT       32	/* Number of RxBDs to use */
 #define TXBD_CNT       32	/* Number of TxBDs to use */
 
-volatile s32 FramesRx=0;		/* Frames have been received */
-volatile s32 RxProcessed=0;    /* Frames have been processed */
-volatile s32 FramesRxErr=0;	/* Number of receive errors */
+volatile u32 FramesRx=0;		/* Frames have been received */
+volatile u32 RxProcessed=0;    /* Frames have been processed */
+volatile u32 FramesRxErr=0;	/* Number of receive errors */
 volatile u32 RxStatus=0;    /* Status of the last received frame */
 
-volatile s32 FramesTx;		/* Frames have been sent */
-volatile s32 DeviceErrors;	/* Number of errors */
+volatile u32 FramesTx;		/* Frames have been sent */
+volatile u32 DeviceErrors;	/* Number of errors */
 
 char srcMac[] = { 0x00, 0x18, 0x3E, 0x03, 0x61, 0x7D};
 char srcIp[] = {192, 168, 1, 10};
@@ -62,7 +62,7 @@ typedef struct {
     uint8_t dest_addr[6];   // Destination MAC address
     uint8_t src_addr[6];    // Source MAC address
     uint16_t frame_type;    // Ethernet frame type
-} __attribute__((packed)) ethHdr;
+} __attribute__((packed)) ethHdr_t;
 
 typedef struct {
     uint16_t htype;        // Hardware Type
@@ -74,7 +74,7 @@ typedef struct {
     uint8_t  spa[4];       // Sender Protocol Address (IP)
     uint8_t  tha[6];       // Target Hardware Address (MAC)
     uint8_t  tpa[4];       // Target Protocol Address (IP)
-} __attribute__((packed)) arpPkt;
+} __attribute__((packed)) arpPkt_t;
 
 uint16_t htons(uint16_t hostshort) {
     // Check the endianess of the system
@@ -87,6 +87,20 @@ uint16_t htons(uint16_t hostshort) {
     } else {
         // The system is little-endian, so swap the bytes
         return (hostshort >> 8) | (hostshort << 8);
+    }
+}
+
+uint16_t ntohs(uint16_t netshort) {
+    // Check the endianess of the system
+    uint16_t test = 0x0102;
+    uint8_t *bytePtr = (uint8_t *)&test;
+
+    if (bytePtr[0] == 0x01) {
+        // The system is big-endian, so no conversion is needed
+        return netshort;
+    } else {
+        // The system is little-endian, so swap the bytes
+        return (netshort >> 8) | (netshort << 8);
     }
 }
 
@@ -331,7 +345,7 @@ LONG ethFrameArp(EthernetFrame * FramePtr, char * DstIp) {
     LONG Status = XST_SUCCESS;
 
 	u8 *arpPtr = (u8 *)FramePtr + 14; // Dst MAC(6) + Src MAC(6) + Type(2)
-	arpPkt * Ptr = (arpPkt *) arpPtr;
+	arpPkt_t * Ptr = (arpPkt_t *) arpPtr;
 	Ptr->htype = htons(0x0001); //Ethernet
 	Ptr->ptype = htons(0x0800); //IPv4
 	Ptr->hlen = 0x06; //hardware Address length
