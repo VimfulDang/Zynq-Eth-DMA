@@ -52,39 +52,39 @@ int main(void) {
     //     return XST_FAILURE;
     // }
     int arpCnt = 0;
+    XEmacPs_Bd * bdPtr = ((XEmacPs_Bd *) macPtr->RxBdRing.BaseBdAddr);
     while (arpCnt < 10) {
         while (FramesRx > RxProcessed) {
-            // xil_printf("FramesRx: %d\n\rRxProcessed: %d\n\r", FramesRx, RxProcessed);
-            XEmacPs_Bd * bdPtr = ((XEmacPs_Bd *) macPtr->RxBdRing.BaseBdAddr) + (RxProcessed % macPtr->RxBdRing.Length);
-            // xil_printf("BaseAddr: %p\tbdPtr:%p\n\r", macPtr->RxBdRing.BaseBdAddr, bdPtr);
             //Wraps bdPtr around
             if (((UINTPTR) bdPtr) > macPtr->RxBdRing.HighBdAddr) {
-                bdPtr -= macPtr->RxBdRing.Length;
+                bdPtr = ((UINTPTR) bdPtr) -  macPtr->RxBdRing.Length;
             }
+            xil_printf("BaseAddr: %p\tbdPtr:%p\n\r", macPtr->RxBdRing.BaseBdAddr, bdPtr);
             //Read the used bit and make sure it's asserted
             if (XEmacPs_BdIsRxNew(bdPtr)) {
                 ethHdr_t * ethHdrPtr = (ethHdr_t *) (XEmacPs_BdGetBufAddr(bdPtr) & XEMACPS_RXBUF_ADD_MASK);
-                // xil_printf("Buffer Address: %p\n\r", ethHdrPtr);
-                //Check if frame is an ARP packet
-                xil_printf("Destination MAC: %02x:%02x:%02x:%02x:%02x:%02x\n\r",
-                           ethHdrPtr->dest_addr[0], ethHdrPtr->dest_addr[1], ethHdrPtr->dest_addr[2],
-                           ethHdrPtr->dest_addr[3], ethHdrPtr->dest_addr[4], ethHdrPtr->dest_addr[5]);
-                xil_printf("Source MAC: %02x:%02x:%02x:%02x:%02x:%02x\n\r",
-                           ethHdrPtr->src_addr[0], ethHdrPtr->src_addr[1], ethHdrPtr->src_addr[2],
-                           ethHdrPtr->src_addr[3], ethHdrPtr->src_addr[4], ethHdrPtr->src_addr[5]);
-                xil_printf("ETH Type: 0x%04x\n\r", ntohs(ethHdrPtr->frame_type));
+                
                 if (ethHdrPtr->frame_type == ntohs(0x0806)) {
-//                    arpProcess((arpPkt_t *) (ethHdrPtr + 1), macPtr);
-                	xil_printf("Found ARP Frame\n\r");
-                    arpCnt++;
+                    //Skip past the ethernet header
+                    arpPkt_t * arpPtr = (arpPkt_t *) (((XEmacPs_BdGetBufAddr(bdPtr) & XEMACPS_RXBUF_ADD_MASK)) + sizeof(ethHdr_t));
+                    //If the sender protocol address (SPA) matches host, get host MAC. 
+                    xil_printf("Sender Protocol Address: %d.%d.%d.%d\n\r",
+                        arpPtr->spa[0], arpPtr->spa[1], arpPtr->spa[2], arpPtr->spa[3]);
+                    //Returns the difference of the first differing byte as if they're unsigned bytes
+                    if (memcmp(arpPtr->spa, hostIp, sizeof(arpPtr->spa)) == 0) {
+                        memcpy((void*) hostMac, arpPtr->sha, sizeof(arpPtr->sha));
+                        xil_printf("Sender Hardware Address: %02x:%02x:%02x:%02x:%02x:%02x\n\r",
+                            arpPtr->sha[0], arpPtr->sha[1], arpPtr->sha[2], arpPtr->sha[3], arpPtr->sha[4], arpPtr->sha[5]);
+                        arpCnt++;
+                    }
                 }
                 // if (XEmacPs_BdIsLast(bdPtr))
                 	// xil_printf("Bd has last\n\r");
                 // xil_printf("Frame Length: %d\n\r", XEmacPs_BdGetLength(bdPtr));
                 XEmacPs_BdClearRxNew(bdPtr);
                 RxProcessed++;
+                bdPtr++;
             }
-            //Clear Used Bit
         }
         sleep(5);
         Status = sendArpRequest(hostIp, macPtr);
