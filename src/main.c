@@ -53,6 +53,7 @@ int main(void) {
     // }
     int arpCnt = 0;
     XEmacPs_Bd * bdPtr = ((XEmacPs_Bd *) macPtr->RxBdRing.BaseBdAddr);
+    xil_printf("DMA Config at 0x10: 0x%08x\n\r", XEmacPs_ReadReg(macPtr->Config.BaseAddress, 0x10));
     while (arpCnt < 10) {
         while (RxProcessed < FramesRx) {
             xil_printf("RxProcessed: %d, FramesRx: %d ArpCnt: %d\n\r", RxProcessed, FramesRx, arpCnt);
@@ -63,13 +64,13 @@ int main(void) {
             //Read the used bit and make sure it's asserted
             if (XEmacPs_BdIsRxNew(bdPtr)) {
                 ethHdr_t * ethHdrPtr = (ethHdr_t *) (XEmacPs_BdGetBufAddr(bdPtr) & XEMACPS_RXBUF_ADD_MASK);
-                xil_printf("Destination MAC: %02x:%02x:%02x:%02x:%02x:%02x\n\r",
-                    ethHdrPtr->dest_addr[0], ethHdrPtr->dest_addr[1], ethHdrPtr->dest_addr[2],
-                    ethHdrPtr->dest_addr[3], ethHdrPtr->dest_addr[4], ethHdrPtr->dest_addr[5]);
-                xil_printf("Source MAC: %02x:%02x:%02x:%02x:%02x:%02x\n\r",
-                    ethHdrPtr->src_addr[0], ethHdrPtr->src_addr[1], ethHdrPtr->src_addr[2],
-                    ethHdrPtr->src_addr[3], ethHdrPtr->src_addr[4], ethHdrPtr->src_addr[5]);
-                xil_printf("ethHdrPtr address: %p\n\r", ethHdrPtr);
+                xil_printf("Frame Length: %d\n\r", XEmacPs_BdGetLength(bdPtr));
+                u8 *payloadPtr = (u8 *) (ethHdrPtr + 1);
+                xil_printf("Payload: ");
+                for (int i = 0; i < XEmacPs_BdGetLength(bdPtr) - sizeof(ethHdr_t); i++) {
+                    xil_printf("%02x ", payloadPtr[i]);
+                }
+                xil_printf("\n\r");
                 xil_printf("Frame Type: 0x%04x\n\r", ntohs(ethHdrPtr->frame_type));
                 if (ethHdrPtr->frame_type == ntohs(0x0806)) {
                     //Skip past the ethernet header
@@ -78,7 +79,6 @@ int main(void) {
                     if (memcmp(arpPtr->spa, hostIp, sizeof(arpPtr->spa)) == 0) {
                         memcpy((void*) hostMac, arpPtr->sha, sizeof(arpPtr->sha));
                         //Set MAC Filter for host
-                        setMacFilter(macPtr, hostMac);
                         arpCnt++;
                     }
                 }
@@ -87,8 +87,8 @@ int main(void) {
                 bdPtr++;
             }
         }
-        sleep(5);
-        Status = sendArpRequest(hostIp, macPtr);
+        // sleep(5);
+        // Status = sendArpRequest(hostIp, macPtr);
     }
 	XEmacPs_IntDisable(macPtr, (XEMACPS_IXR_FRAMERX_MASK |
 		XEMACPS_IXR_RX_ERR_MASK));

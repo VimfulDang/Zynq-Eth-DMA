@@ -26,6 +26,7 @@ EthernetFrame * RxFrame = XPAR_PS7_DDR_0_S_AXI_BASEADDR;		/* Receive buffer */
 
 
 u8 bd_space[0x100000] __attribute__ ((aligned (0x100000)));
+//u8 rxBuf = &bd_space[0x2000];
 u8 * RxBdSpacePtr;
 u8 * TxBdSpacePtr;
 
