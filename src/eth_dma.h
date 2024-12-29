@@ -16,12 +16,15 @@
 #define XEMACPS_MAX_FRAME_SIZE       (XEMACPS_MTU + XEMACPS_HDR_SIZE + \
         XEMACPS_TRL_SIZE)
 
-typedef char EthernetFrame[XEMACPS_MAX_FRAME_SIZE]
+#define ETH_BDBUF_LEN			0x800 //2048, easier for 64Byte alignment than 1518
+#define RX_ETHFRAME_BUF         0x20
+
+typedef char EthernetFrame[ETH_BDBUF_LEN]
 	__attribute__ ((aligned(64)));
 
 
 EthernetFrame TxFrame;		/* Transmit buffer */
-EthernetFrame * RxFrame = XPAR_PS7_DDR_0_S_AXI_BASEADDR;		/* Receive buffer */
+EthernetFrame RxFrame[RX_ETHFRAME_BUF];		/* Receive buffer */
 
 
 

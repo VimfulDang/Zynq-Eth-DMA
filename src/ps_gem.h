@@ -170,11 +170,11 @@ void SetRxBuf(XEmacPs * macPtr)
 
 	for(u32 i = 0; i < ringPtr->Length; i++) {
 		//Set buffer address to DDR
-		XEmacPs_BdSetAddressRx(bdPtr, i*RX_BDBUF_LEN + RXBUF_BASE);
+		XEmacPs_BdSetAddressRx(bdPtr, &RxFrame[i]);
         
 		//Set Ownership to zero
         XEmacPs_BdClearRxNew(bdPtr);
-        xil_printf("Buffer Address: 0x%08X\n\r", XEmacPs_BdGetBufAddr(bdPtr) & XEMACPS_RXBUF_ADD_MASK);
+        // xil_printf("Buffer Address: 0x%08X\n\r", XEmacPs_BdGetBufAddr(bdPtr) & XEMACPS_RXBUF_ADD_MASK);
 		bdPtr++;
 	}
 
