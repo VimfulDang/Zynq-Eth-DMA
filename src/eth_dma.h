@@ -159,14 +159,6 @@ LONG sendArpRequest(char * dstIp, XEmacPs * macPtr) {
 		Xil_DCacheFlushRange((UINTPTR)&TxFrame, sizeof(EthernetFrame));
 	}
     
-    /*
-	 * Allocate, setup, and enqueue 1 TxBDs. The first BD will
-	 * describe the first 32 bytes of TxFrame and the rest of BDs
-	 * will describe the rest of the frame.
-	 *
-	 * The function below will allocate 1 adjacent BDs with Bd1Ptr
-	 * being set as the lead BD.
-	 */
 	Status = XEmacPs_BdRingAlloc(&(XEmacPs_GetTxRing(macPtr)),
 				      1, &Bd1Ptr);
 	if (Status != XST_SUCCESS) {
@@ -179,7 +171,6 @@ LONG sendArpRequest(char * dstIp, XEmacPs * macPtr) {
 	XEmacPs_BdClearTxUsed(Bd1Ptr);
 	XEmacPs_BdSetLast(Bd1Ptr);
 
-//	xil_printf("Finished initializing TxFrame\n\r");
 
     /*
 	 * Enqueue to HW
@@ -193,18 +184,6 @@ LONG sendArpRequest(char * dstIp, XEmacPs * macPtr) {
 	if (macPtr->Config.IsCacheCoherent == 0) {
 		Xil_DCacheFlushRange((UINTPTR)Bd1Ptr, TxFrameLength);
 	}
-
-//    xil_printf("Queuing Block Descriptor\n\r");
-    // XEmacPs_SetQueuePtr(macPtr, macPtr->RxBdRing.BaseBdAddr, 0, XEMACPS_RECV);
-//    XEmacPs_SetQueuePtr(macPtr, macPtr->TxBdRing.BaseBdAddr, 0, XEMACPS_SEND);
-
-//    xil_printf("Starting MAC\n\r");
-
-//    XEmacPs_Start(macPtr);
-
-//    xil_printf("Transmitting Frame\n\r");
-
-    // for(int i = 0; i < 10; i++) {
 
     XEmacPs_SetQueuePtr(macPtr, (UINTPTR) Bd1Ptr, 0, XEMACPS_SEND);
     /* Enable TX and RX interrupts */
@@ -228,74 +207,13 @@ LONG sendArpRequest(char * dstIp, XEmacPs * macPtr) {
         return XST_FAILURE;
     }
 
-		// while (!FramesRx);
-		// Status = XEmacPs_BdRingAlloc(&(XEmacPs_GetTxRing(macPtr)),
-		// 			      1, &Bd1Ptr);
-		// if (Status != XST_SUCCESS) {
-		// 	xil_printf("Error allocating TxBD\n\r");
-		// 	return XST_FAILURE;
-		// }
-	    // XEmacPs_BdSetAddressTx(Bd1Ptr, (UINTPTR)&TxFrame);
-		// XEmacPs_BdSetLength(Bd1Ptr, TxFrameLength);
-		// XEmacPs_BdClearTxUsed(Bd1Ptr);
-		// XEmacPs_BdSetLast(Bd1Ptr);
-	    // /*
-		//  * Enqueue to HW
-		//  */
-		// Status = XEmacPs_BdRingToHw(&(XEmacPs_GetTxRing(macPtr)),
-		// 			     1, Bd1Ptr);
-		// if (Status != XST_SUCCESS) {
-		// 	xil_printf("Error committing TxBD to HW\n\r");
-		// 	return XST_FAILURE;
-		// }
-		// if (macPtr->Config.IsCacheCoherent == 0) {
-		// 	Xil_DCacheFlushRange((UINTPTR)Bd1Ptr, sizeof(XEmacPs_Bd));
-		// }
-		// xil_printf("Try %d\n\r", i);
-    // }
     
     return Status;
 }
 
 /****************************************************************************/
 /**
-* This function places an ARP packet into the receiving Frame
-*
-* @param    FramePtr is a pointer to the frame to change.
-* @param    Destination MAC 6 Bytes
-* @param    Source MAC 6 Bytes
-* @param    Type of Ethernet Frame 2 Bytes
-*
-* @return   Success or Failure.
-*
-* @note     None.
-*
-*****************************************************************************/
-LONG arpProcess(EthernetFrame * FramePtr, char * dstMac, char * srcMac, u16 type) {
-    LONG Status = XST_SUCCESS;
-
-    if (FramePtr == NULL) {
-        return XST_FAILURE;
-    }
-
-    char * ptr = (char *) FramePtr;
-
-    /* Set the destination MAC address */
-    memcpy((void *) ptr, (void *) dstMac, 6);
-    ptr += 6;
-
-    /* Set the source MAC address */
-    memcpy((void *) ptr, (void *) srcMac, 6);
-    ptr += 6;
-
-    /* Set the Ethernet type */
-    memcpy((void *) ptr, (void *) &type, 2);
-    return Status;
-}
-
-/****************************************************************************/
-/**
-* This function places an ARP packet into the receiving Frame
+* This function configure the Ethernet Header of the frame
 *
 * @param    FramePtr is a pointer to the frame to change.
 * @param    Destination MAC 6 Bytes
@@ -331,7 +249,7 @@ LONG ethHdr(EthernetFrame * FramePtr, char * dstMac, char * srcMac, u16 type) {
 
 /****************************************************************************/
 /**
-* This function places an ARP packet into the receiving Frame
+* This function places an ARP request into the frame
 *
 * @param    FramePtr is a pointer to the frame to change.
 * @param    Destination Ip

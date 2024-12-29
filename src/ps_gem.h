@@ -56,6 +56,10 @@ u32 XEmacPsDetectPHY(XEmacPs * EmacPsInstancePtr);
 
 #define IER     0x00000028  //Interrupt Enable
 
+#define LADDR1_OFFSET       0x00000088
+#define HADDR1_OFFSET       0x0000008C
+
+
 /*
  * 	RX DDR Buffer Define
  *
@@ -87,6 +91,8 @@ LONG phyLinkStatus(XEmacPs * macPtr, u32 PhyAddr);
 LONG macInit(XEmacPs * macInstPtr, u16 * macIntrId, XEmacPs_Config * macConfigInstPtr, INTC * IntcInstancePtr);
 LONG bdInit(XEmacPs * macInstPtr);
 void SetRxBuf(XEmacPs * macPtr);
+
+void setMacFilter(XEmacPs * macInstPtr, char * macAddr);
 
 
 /*****************************************************************************/
@@ -776,6 +782,14 @@ LONG macInit(XEmacPs * macInstPtr, u16 * macIntrId, XEmacPs_Config * macConfigIn
     //Auto negotiate and Establish Link
     phyConfig(macPtr, EMACPS_LOOPBACK_SPEED_1G);
 
+    //Disable Broadcast
+    u32 regCfg = XEmacPs_ReadReg(macPtr->Config.BaseAddress, XEMACPS_NWCFG_OFFSET);
+    regCfg &= ~XEMACPS_NWCFG_BCASTDI_MASK;
+    XEmacPs_WriteReg(macPtr->Config.BaseAddress, XEMACPS_NWCFG_OFFSET, regCfg);
+    regCfg = XEmacPs_ReadReg(macPtr->Config.BaseAddress, XEMACPS_NWCFG_OFFSET);
+    xil_printf("Network Configuration Register: 0x%08X\n\r", regCfg);
+    
+
 
     //Set MAC Loopback
 	// *((volatile u32*) macPtr->Config.BaseAddress) |= 0x2;
@@ -887,3 +901,12 @@ LONG bdInit(XEmacPs * macInstPtr) {
 	return Status;
 }
 
+void setMacFilter(XEmacPs * macInstPtr, char * macAddr) {
+    u32 macAddrHigh = (macAddr[0] << 8) | macAddr[1];
+    u32 macAddrLow = (macAddr[2] << 24) | (macAddr[3] << 16) | (macAddr[4] << 8) | macAddr[5];
+    xil_printf("MAC Address High: 0x%04X\n\r", macAddrHigh);
+    xil_printf("MAC Address Low: 0x%08X\n\r", macAddrLow);
+
+    XEmacPs_WriteReg(macInstPtr->Config.BaseAddress, LADDR1_OFFSET, macAddrLow);
+    XEmacPs_WriteReg(macInstPtr->Config.BaseAddress, HADDR1_OFFSET, macAddrHigh);
+}
