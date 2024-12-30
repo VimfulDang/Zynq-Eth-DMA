@@ -79,6 +79,7 @@ static void XEmacPsSendHandler(void *Callback);
 static void XEmacPsRecvHandler(void *Callback);
 static void XEmacPsErrorHandler(void *Callback, u8 Direction, u32 ErrorWord);
 static LONG EmacPsResetDevice(XEmacPs * EmacPsInstancePtr);
+LONG XEmacPs_RxEnable(XEmacPs * macInstPtr);
 
 
 LONG phyConfig(XEmacPs * macPtr, u32 speed);
@@ -170,7 +171,7 @@ void SetRxBuf(XEmacPs * macPtr)
 
 	for(u32 i = 0; i < ringPtr->Length; i++) {
 		//Set buffer address to DDR
-		XEmacPs_BdSetAddressRx(bdPtr, &RxFrame[i]);
+		XEmacPs_BdSetAddressRx(bdPtr, i*RX_BDBUF_LEN + RXBUF_BASE);
         
 		//Set Ownership to zero
         XEmacPs_BdClearRxNew(bdPtr);
@@ -710,7 +711,6 @@ LONG macInit(XEmacPs * macInstPtr, u16 * macIntrId, XEmacPs_Config * macConfigIn
 	
 
 	//Initialize the MAC
-    macConfig = XEmacPs_LookupConfig(XPAR_XEMACPS_0_DEVICE_ID);
 	Status = XEmacPs_CfgInitialize(macPtr, macConfig, macConfig->BaseAddress);
 	if (Status != XST_SUCCESS) {
 		xil_printf("Error initializing MAC\n\r");
@@ -902,4 +902,17 @@ LONG bdInit(XEmacPs * macInstPtr) {
 	}
 
 	return Status;
+}
+
+LONG XEmacPs_RxEnable(XEmacPs * macInstPtr) {
+	u32 Status, Reg;
+	/* Enable receiver if not already enabled */
+    Reg = XEmacPs_ReadReg(macInstPtr->Config.BaseAddress,
+                XEMACPS_NWCTRL_OFFSET);
+    if ((!(Reg & XEMACPS_NWCTRL_RXEN_MASK))==TRUE) {
+        XEmacPs_WriteReg(macInstPtr->Config.BaseAddress,
+                    XEMACPS_NWCTRL_OFFSET,
+                Reg | (u32)XEMACPS_NWCTRL_RXEN_MASK);
+    }
+    return 1;
 }

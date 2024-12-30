@@ -43,7 +43,8 @@ def send_ethernet_frame(interface, dst_mac, payload):
 
         # Extract the Ethernet header and payload from the response
         received_header = response[:14]
-        received_payload = response[14:]
+        received_payload = response[14:len(payload)+14]
+        print(received_payload);
 
         # Verify the received payload
         if received_payload == payload:

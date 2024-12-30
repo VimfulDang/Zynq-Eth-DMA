@@ -55,13 +55,6 @@ char hostIp[] = {192, 168, 1, 103};
 
 char broadCastMac[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
-/* Function Prototype */
-LONG sendArpRequest(char * dstIp, XEmacPs * macPtr);
-LONG ethHdr(EthernetFrame * FramePtr, char * dstMac, char * srcMac, u16 type);
-LONG ethFrameArp(EthernetFrame * FramePtr, char * DstIp);
-void XEmacPs_BdDump(XEmacPs_Bd * BdPtr);
-void EmacPsUtilFrameMemClear(EthernetFrame * FramePtr);
-
 typedef struct {
     uint8_t dest_addr[6];   // Destination MAC address
     uint8_t src_addr[6];    // Source MAC address
@@ -79,6 +72,15 @@ typedef struct {
     uint8_t  tha[6];       // Target Hardware Address (MAC)
     uint8_t  tpa[4];       // Target Protocol Address (IP)
 } __attribute__((packed)) arpPkt_t;
+
+/* Function Prototype */
+LONG sendTx(XEmacPs * macPtr, char * dstMac, char * txBuf, u16 len);
+LONG sendArpRequest(char * dstIp, XEmacPs * macPtr);
+LONG setEthHdr(ethHdr_t * EthHdrPtr, char * dstMac, char * srcMac, u16 type);
+LONG ethFrameArp(EthernetFrame * FramePtr, char * DstIp);
+void XEmacPs_BdDump(XEmacPs_Bd * BdPtr);
+void EmacPsUtilFrameMemClear(EthernetFrame * FramePtr);
+
 
 uint16_t htons(uint16_t hostshort) {
     // Check the endianess of the system
@@ -134,6 +136,90 @@ void EmacPsUtilFrameMemClear(EthernetFrame * FramePtr)
 	}
 }
 
+/****************************************************************************/
+/**
+* This function sends a TX frame given dstMac, data address, length, and it has
+* to be contiguous. 
+* 
+* It will configure the Ethernet Frame as IP4 Type
+* @param    Destination IP 4 Bytes
+* @param    Pointer to the MAC instance pointer
+*
+* @return   Success or Failure.
+*
+* @note     None.
+*
+*****************************************************************************/
+LONG sendTx(XEmacPs * macPtr, char * dstMac, char * txBuf, u16 len) {
+    LONG Status = 0;
+    XEmacPs_Bd * BdPtr;
+    ethHdr_t ethHdr;
+    FramesTx = 0;
+
+    Status = setEthHdr(&ethHdr, dstMac, srcMac, htons(ETH_IP4_TYPE));
+
+    //Flush the frame from cache
+    if (macPtr->Config.IsCacheCoherent == 0) {
+		Xil_DCacheFlushRange((UINTPTR)&ethHdr, sizeof(ethHdr_t));
+	}
+    
+	Status = XEmacPs_BdRingAlloc(&(XEmacPs_GetTxRing(macPtr)),
+				      2, &BdPtr);
+	if (Status != XST_SUCCESS) {
+		xil_printf("Error allocating TxBD\n\r");
+		return XST_FAILURE;
+	}
+
+    //Set Eth Header Bd
+    XEmacPs_BdSetAddressTx(BdPtr, (UINTPTR)&ethHdr);
+	XEmacPs_BdSetLength(BdPtr, sizeof(ethHdr_t));
+	XEmacPs_BdClearTxUsed(BdPtr);
+
+    BdPtr++;
+    //Set payload Bd
+    XEmacPs_BdSetAddressTx(BdPtr, txBuf);
+	XEmacPs_BdSetLength(BdPtr, len);
+	XEmacPs_BdSetLast(BdPtr);
+    XEmacPs_BdClearTxUsed(BdPtr);
+
+    //Revert BdPtr back to first BdPtr
+    BdPtr--;
+    /*
+	 * Enqueue to HW
+	 */
+	Status = XEmacPs_BdRingToHw(&(XEmacPs_GetTxRing(macPtr)),
+				     2, BdPtr);
+	if (Status != XST_SUCCESS) {
+		xil_printf("Error committing TxBD to HW\n\r");
+		return XST_FAILURE;
+	}
+	if (macPtr->Config.IsCacheCoherent == 0) {
+		Xil_DCacheFlushRange((UINTPTR)BdPtr, sizeof(ethHdr_t) + len);
+	}
+
+    XEmacPs_SetQueuePtr(macPtr, (UINTPTR) BdPtr, 0, XEMACPS_SEND);
+    /* Enable TX and RX interrupts */
+    XEmacPs_IntEnable(macPtr, (XEMACPS_IXR_TX_ERR_MASK | (u32)XEMACPS_IXR_TXCOMPL_MASK));
+    XEmacPs_Start(macPtr);
+    XEmacPs_Transmit(macPtr);
+    while (!FramesTx);
+
+    if (XEmacPs_BdRingFromHwTx(&(XEmacPs_GetTxRing(macPtr)),
+                    2, &BdPtr) == 0) {
+        xil_printf
+            ("TxBDs were not ready for post processing\n\r");
+        return XST_FAILURE;
+    }
+
+    Status = XEmacPs_BdRingFree(&(XEmacPs_GetTxRing(macPtr)),
+                        2, BdPtr);
+
+    if (Status != XST_SUCCESS) {
+        xil_printf("Error freeing up TxBDs\n\r");
+        return XST_FAILURE;
+    }
+    return Status;
+}
 
 /****************************************************************************/
 /**
@@ -153,7 +239,7 @@ LONG sendArpRequest(char * dstIp, XEmacPs * macPtr) {
     XEmacPs_Bd * Bd1Ptr;
     FramesTx = 0;
 
-    Status = ethHdr(&TxFrame, broadCastMac, srcMac, htons(ETH_IP4_TYPE));
+    Status = setEthHdr((ethHdr_t*) &TxFrame, broadCastMac, srcMac, htons(ETH_IP4_TYPE));
     Status |= ethFrameArp(&TxFrame, dstIp);
 
 	TxFrameLength = 64;
@@ -219,7 +305,7 @@ LONG sendArpRequest(char * dstIp, XEmacPs * macPtr) {
 /**
 * This function configure the Ethernet Header of the frame
 *
-* @param    FramePtr is a pointer to the frame to change.
+* @param    EthHdrPtr is pointer to Ethdr_t struct
 * @param    Destination MAC 6 Bytes
 * @param    Source MAC 6 Bytes
 * @param    Type of Ethernet Frame 2 Bytes
@@ -229,25 +315,21 @@ LONG sendArpRequest(char * dstIp, XEmacPs * macPtr) {
 * @note     None.
 *
 *****************************************************************************/
-LONG ethHdr(EthernetFrame * FramePtr, char * dstMac, char * srcMac, u16 type) {
+LONG setEthHdr(ethHdr_t * EthHdrPtr, char * dstMac, char * srcMac, u16 type) {
     LONG Status = XST_SUCCESS;
 
-    if (FramePtr == NULL) {
+    if (EthHdrPtr == NULL) {
         return XST_FAILURE;
     }
 
-    char * ptr = (char *) FramePtr;
-
     /* Set the destination MAC address */
-    memcpy((void *) ptr, (void *) dstMac, 6);
-    ptr += 6;
+    memcpy((void *) &EthHdrPtr->dest_addr, (void *) dstMac, sizeof(EthHdrPtr->dest_addr));
 
     /* Set the source MAC address */
-    memcpy((void *) ptr, (void *) srcMac, 6);
-    ptr += 6;
+    memcpy((void *) &EthHdrPtr->src_addr, (void *) srcMac, sizeof(EthHdrPtr->src_addr));
 
     /* Set the Ethernet type */
-    memcpy((void *) ptr, (void *) &type, 2);
+    memcpy((void *) &EthHdrPtr->frame_type, (void *) &type, sizeof(EthHdrPtr->frame_type));
     return Status;
 }
 
