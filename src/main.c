@@ -3,6 +3,8 @@
 #include "axidma.h"
 //#include "xuartps.h"
 
+#define MAX_FRAMES_TO_PROCESS 10
+
 /*
     1. Initialize the Controller
     2. Configure the Controller
@@ -52,7 +54,7 @@ int main(void) {
     //Pointer for processing Bd Rx
     u32 RxProcessed = 0;
     XEmacPs_Bd * bdPtr = ((XEmacPs_Bd *) macPtr->RxBdRing.BaseBdAddr);
-    while (RxProcessed < 10) {
+    while (RxProcessed < MAX_FRAMES_TO_PROCESS) {
         // while (RxProcessed < FramesRx) {
         //     xil_printf("RxProcessed: %d, FramesRx: %d ArpCnt: %d\n\r", RxProcessed, FramesRx, arpCnt);
         //     //Wraps bdPtr around
