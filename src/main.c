@@ -1,5 +1,6 @@
 #include "eth_dma.h"
 #include "ps_gem.h"
+#include "axidma.h"
 //#include "xuartps.h"
 
 /*
