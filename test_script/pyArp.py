@@ -20,7 +20,7 @@ def send_ethernet_frame(interface, dst_mac, payload):
         # Get the interface index and source MAC
         interface_index = sock.getsockname()[3]
         src_mac_bytes = sock.getsockname()[4]
-
+v
         # Convert MAC addresses to bytes
         dst_mac_bytes = bytes.fromhex(dst_mac.replace(':', ''))
 
